@@ -89,6 +89,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> Teleoperator:
         from .bi_koch_leader import BiKochLeader
 
         return BiKochLeader(config)
+    elif config.type == "koch_leader_nero":
+        from .koch_leader_nero import KochLeaderNero
+    
+        return KochLeaderNero(config)
     else:
         try:
             return cast(Teleoperator, make_device_from_device_class(config))
