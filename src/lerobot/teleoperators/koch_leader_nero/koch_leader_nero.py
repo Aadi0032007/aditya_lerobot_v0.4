@@ -26,7 +26,7 @@ from lerobot.motors.dynamixel import (
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from ..teleoperator import Teleoperator
-from .config_koch_leader import KochLeaderNeroConfig
+from .config_koch_leader_nero import KochLeaderNeroConfig
 
 logger = logging.getLogger(__name__)
 
