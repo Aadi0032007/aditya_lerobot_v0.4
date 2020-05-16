@@ -41,7 +41,6 @@ class KochLeaderNero(Teleoperator):
     config_class = KochLeaderNeroConfig
     name = "koch_leader_nero"
 
-    # swapped 5 and 4 ids for wrist flex and wrist roll
     def __init__(self, config: KochLeaderNeroConfig):
         super().__init__(config)
         self.config = config
@@ -51,8 +50,8 @@ class KochLeaderNero(Teleoperator):
                 "shoulder_pan": Motor(1, "xl330-m077", MotorNormMode.RANGE_M100_100),
                 "shoulder_lift": Motor(2, "xl330-m077", MotorNormMode.RANGE_M100_100),
                 "elbow_flex": Motor(3, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "wrist_flex": Motor(5, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "wrist_roll": Motor(4, "xl330-m077", MotorNormMode.RANGE_M100_100),
+                "wrist_flex": Motor(4, "xl330-m077", MotorNormMode.RANGE_M100_100),
+                "wrist_roll": Motor(5, "xl330-m077", MotorNormMode.RANGE_M100_100),
                 "gripper": Motor(6, "xl330-m077", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
@@ -169,6 +168,17 @@ class KochLeaderNero(Teleoperator):
         start = time.perf_counter()
         action = self.bus.sync_read("Present_Position")
         action = {f"{motor}.pos": val for motor, val in action.items()}
+        
+        # --- SWAP INDEX 3 AND 4 HERE ---
+        # Convert dictionary to a list of (key, value) pairs
+        items = list(action.items())
+        # Swap the values at index 3 and 4 while keeping the original keys in place
+        items[3] = (items[3][0], items[4][1])
+        items[4] = (items[4][0], items[3][1])
+        # Rebuild the dictionary
+        action = dict(items)
+        # -------------------------------
+
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
         return action
