@@ -169,15 +169,14 @@ class KochLeaderNero(Teleoperator):
         action = self.bus.sync_read("Present_Position")
         action = {f"{motor}.pos": val for motor, val in action.items()}
         
-        # --- SWAP INDEX 3 AND 4 HERE ---
-        # Convert dictionary to a list of (key, value) pairs
-        items = list(action.items())
-        # Swap the values at index 3 and 4 while keeping the original keys in place
-        items[3] = (items[3][0], items[4][1])
-        items[4] = (items[4][0], items[3][1])
-        # Rebuild the dictionary
-        action = dict(items)
-        # -------------------------------
+        # --- SAFELY SWAP VALUES AT INDEX 3 AND 4 ---
+        keys = list(action.keys())
+        key3 = keys[3] # "wrist_flex.pos"
+        key4 = keys[4] # "wrist_roll.pos"
+        
+        # Swap the values associated with these keys
+        action[key3], action[key4] = action[key4], action[key3]
+        # -------------------------------------------
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
