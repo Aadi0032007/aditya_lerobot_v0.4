@@ -19,27 +19,6 @@ from .config_agx_nero_follower import AgxNeroFollowerConfig
 
 logger = logging.getLogger(__name__)
 
-JOINT_NAMES = [
-    "shoulder_pan",
-    "shoulder_lift",
-    "elbow_flex",
-    "forearm_roll",
-    "wrist_pitch",
-    "wrist_roll",
-    "wrist_twist",
-]
-
-# Software joint limits in degrees (mirrors pyAgxArm constants.py for NERO)
-JOINT_LIMITS_DEG = {
-    "shoulder_pan":  (-155.0,  155.0),
-    "shoulder_lift": (-100.0,  100.0),
-    "elbow_flex":    (-158.0,  158.0),
-    "forearm_roll":  ( -58.0,  123.0),
-    "wrist_pitch":   (-158.0,  158.0),
-    "wrist_roll":    ( -42.0,   55.0),
-    "wrist_twist":   ( -90.0,   90.0),
-}
-
 
 class AgxNeroFollower(Robot):
     config_class = AgxNeroFollowerConfig
@@ -58,7 +37,7 @@ class AgxNeroFollower(Robot):
 
     @property
     def _motors_ft(self) -> dict[str, type]:
-        return {f"{name}.pos": float for name in ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_roll", "wrist_flex", "gripper"]}
+        return {f"{name}.pos": float for name in ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]}
 
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
@@ -109,7 +88,7 @@ class AgxNeroFollower(Robot):
         self.gripper = self._arm.init_effector(self._arm.OPTIONS.EFFECTOR.AGX_GRIPPER)
         self._arm.connect()
         self._arm.set_normal_mode()
-        self.gripper.move_gripper_deg(value=0.0, force=3.0)
+        self.gripper.move_gripper_deg(value=0.0, force=0.5)
 
         # Enable all joints (retry until confirmed)
         for _ in range(50):
@@ -178,8 +157,8 @@ class AgxNeroFollower(Robot):
             0: "shoulder_pan",
             1: "shoulder_lift",
             3: "elbow_flex",
-            4: "wrist_roll",
-            6: "wrist_flex",
+            4: "wrist_flex",
+            6: "wrist_roll",
         }
     
         t0 = time.perf_counter()
@@ -197,7 +176,8 @@ class AgxNeroFollower(Robot):
         # Camera processing remains the same
         for cam_key, cam in self.cameras.items():
             obs[cam_key] = cam.async_read()
-    
+          
+        # print({k: v for k, v in obs.items() if "pos" in k})
         return obs
 
     # ------------------------------------------------------------------
@@ -221,8 +201,8 @@ class AgxNeroFollower(Robot):
         # 2. Force indices 2 and 5 to zero
         goal_deg.insert(2, 0.0)
         goal_deg.insert(5, 0.0)
+        goal_deg[0] = goal_deg[0] - 5
         goal_deg[1] = goal_deg[1] + 43.7466
-        goal_deg[4], goal_deg[6] = goal_deg[6], goal_deg[4]
     
         # 4. Apply max_relative_target safety cap if configured
         if self.config.max_relative_target is not None:
@@ -241,7 +221,7 @@ class AgxNeroFollower(Robot):
     
         # 5. Convert degrees → radians and send to arm
         # print(goal_deg)
-        self.gripper.move_gripper_deg(value=gripper)
+        self.gripper.move_gripper_deg(value=gripper, force=0.5)
         self._arm.move_j([math.radians(v) for v in goal_deg])
         
         
