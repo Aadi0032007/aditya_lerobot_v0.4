@@ -107,8 +107,8 @@ LeRobot works with Python 3.10+ and PyTorch 2.2+.
 Create a virtual environment with Python 3.10 and activate it, e.g. with [`miniforge`](https://conda-forge.org/download/):
 
 ```bash
-conda create -y -n lerobot python=3.10
-conda activate lerobot
+conda create -y -n aditya python=3.10
+conda activate aditya
 ```
 
 When using `conda`, install `ffmpeg` in your environment:
