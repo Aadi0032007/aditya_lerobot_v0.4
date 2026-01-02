@@ -134,8 +134,8 @@ conda install ffmpeg -c conda-forge
 First, clone the repository and navigate into the directory:
 
 ```bash
-git clone https://github.com/huggingface/lerobot.git
-cd lerobot
+git clone https://github.com/Aadi0032007/aditya_lerobot_v0.4.git
+cd aditya_lerobot_v0.4
 ```
 
 Then, install the library in editable mode. This is useful if you plan to contribute to the code.
@@ -152,6 +152,12 @@ For simulations, 🤗 LeRobot comes with gymnasium environments that can be inst
 - [aloha](https://github.com/huggingface/gym-aloha)
 - [xarm](https://github.com/huggingface/gym-xarm)
 - [pusht](https://github.com/huggingface/gym-pusht)
+
+For instance, to install 🤗 LeRobot with dynamixel, use:
+
+```bash
+pip install -e ".['dynamixel']"
+```
 
 For instance, to install 🤗 LeRobot with aloha and pusht, use:
 
