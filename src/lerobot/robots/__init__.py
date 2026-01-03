@@ -17,3 +17,6 @@
 from .config import RobotConfig
 from .robot import Robot
 from .utils import make_robot_from_config
+
+# added by Aadi for Revobot's HDI Follower Robot
+from . import revobot_hdi_follower
