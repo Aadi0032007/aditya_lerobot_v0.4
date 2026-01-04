@@ -459,10 +459,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
         with VideoEncodingManager(dataset):
             recorded_episodes = 0
+
             
-            # aaded by Aadi
-            # Execute a few seconds without recording to give time to teleoperate
-            if not events["stop_recording"] or events["rerecord_episode"]:
+            while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
+                
                 log_say("Teleoperate to desired position", cfg.play_sounds)
                 record_loop(
                     robot=robot,
@@ -476,9 +476,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     single_task=cfg.dataset.single_task,
                     display_data=cfg.display_data,
                 )
-
-            
-            while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
+                    
                 log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
                 record_loop(
                     robot=robot,
