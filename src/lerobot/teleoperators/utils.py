@@ -81,6 +81,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> Teleoperator:
         from .reachy2_teleoperator import Reachy2Teleoperator
 
         return Reachy2Teleoperator(config)
+    elif config.type == "koch_leader_remote":
+        from .koch_leader_remote import KochLeaderRemote
+
+        return KochLeaderRemote(config)
     else:
         try:
             return cast(Teleoperator, make_device_from_device_class(config))

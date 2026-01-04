@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,9 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config import TeleoperatorConfig
-from .teleoperator import Teleoperator
-from .utils import TeleopEvents, make_teleoperator_from_config
+from dataclasses import dataclass
 
-# added by Aadi for remote koch leader robot
-from . import koch_leader_remote
+from ..config import TeleoperatorConfig
+
+
+@TeleoperatorConfig.register_subclass("koch_leader_remote")
+@dataclass
+class KochLeaderRemoteConfig(TeleoperatorConfig):
+    # Port to connect to the arm
+    port: str
+
+    # Sets the arm in torque mode with the gripper motor set to this value. This makes it possible to squeeze
+    # the gripper and have it spring back to an open position on its own.
+    gripper_open_pos: float = 50.0
