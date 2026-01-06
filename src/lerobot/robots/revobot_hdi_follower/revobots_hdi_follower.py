@@ -214,8 +214,12 @@ class RevobotsHdiFollower(Robot):
         return {k: float(np.deg2rad(v)) for k, v in state_deg.items()}
 
     def _revobot_robot_offset(self, index: int, value_deg: float) -> int:
-        if index == 1:
-            return int((90 - int(value_deg)) * 3600)
+        if index == 0:
+            return int(value_deg * -1 * 3600)
+        elif index == 1:
+            return int((int(value_deg) + 40) * 3600)
+        elif index == 2:	
+            return int(95 - int(value_deg)) * 3600
         elif index == 3:
             return int((int(value_deg) - 90) * 3600)
         elif index == 5:
@@ -250,14 +254,11 @@ class RevobotsHdiFollower(Robot):
             key = f"{name}.pos"
             values_list.append(float(action.get(key, 0.0)))
 
-        # radians -> degrees if required
-        if not self.config.use_degrees:
-            values_list = [float(np.rad2deg(v)) for v in values_list]
 
         # legacy quirk
         if len(values_list) < 7:
             values_list.insert(4, 0.0)
-
+            
         # build main command and special gripper2 command (if i==6)
         command2: str | None = None
 
@@ -310,12 +311,12 @@ class RevobotsHdiFollower(Robot):
             
                 # (optional, only if you decide to send it later)
                 # command3 = (
-                #     "xxx xxx xxx xxx S ServoSetX 1 116 12 %"
-                #     + str(data3)
-                #     + "%"
-                #     + str(data4)
-                #     + "%00%00;"
-                # )
+                #      "xxx xxx xxx xxx S ServoSetX 1 116 12 %"
+                #      + str(data3)
+                #      + "%"
+                #      + str(data4)
+                #      + "%00%00;"
+                #  )
 
         command += ";"
 
@@ -324,9 +325,11 @@ class RevobotsHdiFollower(Robot):
             self.sock.send(command2.encode("utf-8"))
             self._prev_cmd_gripper2 = command2
             time.sleep(0.005)
+        
 
         if self._prev_cmd_main != command:
             self.sock.send(command.encode("utf-8"))
+            #print(command)
             self._prev_cmd_main = command
 
         self.logs["write_pos_dt_s"] = time.perf_counter() - t0
