@@ -472,7 +472,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     robot_action_processor=robot_action_processor,
                     robot_observation_processor=robot_observation_processor,
                     teleop=teleop,
-                    control_time_s=cfg.dataset.reset_time_s,
+                    control_time_s=None,
                     single_task=cfg.dataset.single_task,
                     display_data=cfg.display_data,
                 )
