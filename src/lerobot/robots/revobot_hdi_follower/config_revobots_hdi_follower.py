@@ -27,7 +27,7 @@ def revobots_cameras_config() -> dict[str, CameraConfig]:
 @dataclass
 class RevobotsHdiFollowerConfig(RobotConfig):
     # Socket connection (use your old revobot follower IP/port)
-    socket_ip: str = "127.0.0.1"
+    socket_ip: str = "192.168.0.142"
     socket_port: int = 50000
 
     # Motor names / order (use old revobot follower names)
