@@ -95,7 +95,7 @@ class RevobotsHdiFollower(Robot):
         return self.sock is not None and self.sock.fileno() >= 0
 
     def _reset_connection(self):
-        logger.warning("Resetting connection to %s ...", self.name)
+        # logger.warning("Resetting connection to %s ...", self.name)
         try:
             if self.sock is not None:
                 try:
@@ -107,7 +107,7 @@ class RevobotsHdiFollower(Robot):
 
         time.sleep(0.5)
         self._connect_socket()
-        logger.info("Reconnected %s", self.name)
+        # logger.info("Reconnected %s", self.name)
 
     def _ensure_connected(self):
         if not self._is_socket_ok():
@@ -159,7 +159,7 @@ class RevobotsHdiFollower(Robot):
             finally:
                 self.sock = None
 
-        logger.info("Disconnected %s", self.name)
+        # logger.info("Disconnected %s", self.name)
 
     # ----------------- socket primitives -----------------
 
@@ -169,7 +169,7 @@ class RevobotsHdiFollower(Robot):
             assert self.sock is not None
             self.sock.send(data)
         except Exception as e:
-            logger.error("Send failed (%s), reconnecting...", e)
+            # logger.error("Send failed (%s), reconnecting...", e)
             self._reset_connection()
             assert self.sock is not None
             self.sock.send(data)
@@ -190,7 +190,7 @@ class RevobotsHdiFollower(Robot):
             return b"".join(chunks)
 
         except Exception as e:
-            logger.error("Recv failed (%s), reconnecting...", e)
+            # logger.error("Recv failed (%s), reconnecting...", e)
             self._reset_connection()
 
             # retry once
