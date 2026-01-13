@@ -463,19 +463,20 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             
             while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
                 
-                log_say("Teleoperate to desired position", cfg.play_sounds)
-                record_loop(
-                    robot=robot,
-                    events=events,
-                    fps=cfg.dataset.fps,
-                    teleop_action_processor=teleop_action_processor,
-                    robot_action_processor=robot_action_processor,
-                    robot_observation_processor=robot_observation_processor,
-                    teleop=teleop,
-                    control_time_s=36000, #10 hour would be more than enough
-                    single_task=cfg.dataset.single_task,
-                    display_data=cfg.display_data,
-                )
+                if policy is None:
+                    log_say("Teleoperate to desired position", cfg.play_sounds)
+                    record_loop(
+                        robot=robot,
+                        events=events,
+                        fps=cfg.dataset.fps,
+                        teleop_action_processor=teleop_action_processor,
+                        robot_action_processor=robot_action_processor,
+                        robot_observation_processor=robot_observation_processor,
+                        teleop=teleop,
+                        control_time_s=36000, #10 hour would be more than enough
+                        single_task=cfg.dataset.single_task,
+                        display_data=cfg.display_data,
+                    )
                     
                 log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
                 record_loop(
@@ -500,19 +501,20 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 if not events["stop_recording"] and (
                     (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
                 ):
-                    log_say("Reset the environment", cfg.play_sounds)
-                    record_loop(
-                        robot=robot,
-                        events=events,
-                        fps=cfg.dataset.fps,
-                        teleop_action_processor=teleop_action_processor,
-                        robot_action_processor=robot_action_processor,
-                        robot_observation_processor=robot_observation_processor,
-                        teleop=teleop,
-                        control_time_s=cfg.dataset.reset_time_s,
-                        single_task=cfg.dataset.single_task,
-                        display_data=cfg.display_data,
-                    )
+                    if policy is None:
+                        log_say("Reset the environment", cfg.play_sounds)
+                        record_loop(
+                            robot=robot,
+                            events=events,
+                            fps=cfg.dataset.fps,
+                            teleop_action_processor=teleop_action_processor,
+                            robot_action_processor=robot_action_processor,
+                            robot_observation_processor=robot_observation_processor,
+                            teleop=teleop,
+                            control_time_s=cfg.dataset.reset_time_s,
+                            single_task=cfg.dataset.single_task,
+                            display_data=cfg.display_data,
+                        )
 
                 if events["rerecord_episode"]:
                     log_say("Re-record episode", cfg.play_sounds)
