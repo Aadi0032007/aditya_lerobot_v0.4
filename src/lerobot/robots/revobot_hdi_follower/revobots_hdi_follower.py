@@ -282,7 +282,7 @@ class RevobotsHdiFollower(Robot):
         elif index == 5:
             return int((116 - int(value_deg)) * 71.1111)
         elif index == 6:
-            return int(1250 + value_deg * 17.778)
+            return int(1250 + value_deg * 25.778)
         else:
             return int(value_deg * 3600)
 
@@ -331,7 +331,7 @@ class RevobotsHdiFollower(Robot):
                 if v > 45.0:
                     v = 45.0
 
-                computed_g2 = 2054 + int((45.0 - v) * 17.778)
+                computed_g2 = 1654 + int((45.0 - v) * 25.778)
                 computed_g2 = max(0, min(65535, computed_g2))
 
                 b2 = int(computed_g2).to_bytes(2, "little", signed=False)
