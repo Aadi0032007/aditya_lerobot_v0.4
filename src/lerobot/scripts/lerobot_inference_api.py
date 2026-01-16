@@ -150,6 +150,81 @@ def inference_loop(
         dt = time.perf_counter() - loop_t
         precise_sleep(max(0.0, 1.0 / fps - dt))
 
+# ---------------------------------------------------------------------
+# Time-bounded inference loop
+# ---------------------------------------------------------------------
+def inference_loop_with_markers(
+    *,
+    robot,
+    policy,
+    preprocessor,
+    postprocessor,
+    robot_action_processor,
+    robot_observation_processor,
+    features: dict[str, Any],
+    single_task: str | None,
+    fps: int,
+    duration_s: float,
+    display_data: bool,
+    prompt: str | "object"
+):
+    from lerobot.cameras.image_detection_tracking.gemini_utils import draw_markers_on_image, get_object_coordinates 
+    
+    start_t = time.perf_counter()
+    
+    obs = robot.get_observation()
+    coord = get_object_coordinates(obs['phone'], prompt)
+    
+    while (time.perf_counter() - start_t) < duration_s:
+        loop_t = time.perf_counter()
+
+        # 1) Get observation
+        obs = robot.get_observation()
+        
+        # Place markers
+        obs['phone'] = draw_markers_on_image(obs['phone'], coord)
+        
+        obs_processed = robot_observation_processor(obs)
+
+        # 2) Dataset-shaped observation frame
+        observation_frame = build_dataset_frame(
+            features, obs_processed, prefix=OBS_STR
+        )
+
+        # 3) Policy inference
+        action_values = predict_action(
+            observation=observation_frame,
+            policy=policy,
+            device=get_safe_torch_device(policy.config.device),
+            preprocessor=preprocessor,
+            postprocessor=postprocessor,
+            use_amp=policy.config.use_amp,
+            task=single_task,
+            robot_type=robot.robot_type,
+        )
+
+        # 4) Convert to robot action
+        act_processed_policy = make_robot_action(action_values, features)
+
+        # 5) Robot-side action processing
+        robot_action_to_send = robot_action_processor(
+            (act_processed_policy, obs)
+        )
+
+        # 6) Send to robot
+        robot.send_action(robot_action_to_send)
+
+        # 7) Optional visualization
+        if display_data:
+            log_rerun_data(
+                observation=obs_processed,
+                action=act_processed_policy,
+            )
+
+        # 8) Maintain FPS
+        dt = time.perf_counter() - loop_t
+        precise_sleep(max(0.0, 1.0 / fps - dt))
+
 
 # ---------------------------------------------------------------------
 # Public API: callable inference (robot passed in)
@@ -211,6 +286,70 @@ def run_inference(
         fps=fps,
         duration_s=duration_s,
         display_data=display_data,
+    )
+
+    log_say("Inference finished")
+    
+
+def run_inference_with_markers(
+    *,
+    robot,
+    policy_path: str,
+    dataset_repo_id: str,
+    duration_s: float = 60.0,
+    fps: int = 30,
+    device: str = "cuda",
+    single_task: str | None = None,
+    display_data: bool = False,
+    rename_map: dict[str, str] | None = None,
+    prompt: str | "object"
+):
+    """
+    Runs policy inference on an already-initialized and connected robot.
+
+    Robot lifecycle (create/connect/disconnect) MUST be handled externally.
+    """
+
+    init_logging()
+    logging.info("Starting inference")
+
+    if display_data:
+        init_rerun(session_name="inference")
+
+    (
+        policy,
+        preprocessor,
+        postprocessor,
+        robot_action_processor,
+        robot_observation_processor,
+        features,
+    ) = build_policy_pipeline(
+        policy_path=policy_path,
+        dataset_repo_id=dataset_repo_id,
+        device=device,
+        rename_map=rename_map,
+    )
+
+    # Reset everything before running
+    policy.reset()
+    preprocessor.reset()
+    postprocessor.reset()
+
+    log_say(f"Running inference for {duration_s:.1f}s")
+
+    inference_loop_with_markers(
+        robot=robot,
+        policy=policy,
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+        robot_action_processor=robot_action_processor,
+        robot_observation_processor=robot_observation_processor,
+        features=features,
+        single_task=single_task,
+        fps=fps,
+        duration_s=duration_s,
+        display_data=display_data,
+        prompt=prompt
     )
 
     log_say("Inference finished")
