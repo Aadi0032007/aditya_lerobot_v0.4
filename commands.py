@@ -14,15 +14,20 @@ lerobot-calibrate \
     --teleop.type=koch_leader \
     --teleop.port=/dev/ttyACM1 \
     --teleop.id=rahul
+    
+
+*********** HDI INIT*******************
+
+python src/lerobot/robots/revobot_hdi_follower/hdi_initialisation.py 
 
 ************ Teleoperation ***************
 
 lerobot-teleoperate \
   --robot.type=revobots_hdi_follower \
-  --robot.cameras='{ phone: {"type": "opencv", "index_or_path": 10, "width": 640, "height": 480, "fps": 30}, wrist_1: {"type": "opencv", "index_or_path": 6, "width": 640, "height": 480, "fps": 30}}' \
-  --robot.socket_ip="192.168.0.142" \
+  --robot.cameras='{}' \
+  --robot.socket_ip="127.0.0.1" \
   --teleop.type=koch_leader \
-  --teleop.port=/dev/ttyACM1 \
+  --teleop.port=/dev/ttyACM0 \
   --teleop.id=rahul \
   --display_data=true
 
@@ -32,18 +37,27 @@ lerobot-teleoperate \
 
 lerobot-record \
   --robot.type=revobots_hdi_follower \
-  --robot.cameras='{ phone: {"type": "opencv", "index_or_path": 10, "width": 640, "height": 480, "fps": 30}, wrist_1: {"type": "opencv", "index_or_path": 6, "width": 640, "height": 480, "fps": 30}}' \
+  --robot.cameras='{ phone: {"type": "opencv", "index_or_path": 0, "width": 640, "height": 480, "fps": 30}, wrist_1: {"type": "opencv", "index_or_path": 2, "width": 640, "height": 480, "fps": 30}}' \
   --robot.socket_ip="192.168.0.142" \
   --teleop.type=koch_leader \
-  --teleop.port=/dev/ttyACM1 \
+  --teleop.port=/dev/ttyACM0 \
   --teleop.id=rahul \
   --display_data=true \
   --dataset.repo_id=revolabs/ball_sorting \
-  --dataset.episode_time_s=60 \
-  --dataset.reset_time_s=10 \
+  --dataset.episode_time_s=60 \  
   --dataset.num_episodes=100 \
+  --dataset.reset_time_s=5 \
   --dataset.single_task="picking the ball and placing in the basket" \
   --dataset.push_to_hub=False 
+  
+  
+******Delete Recording**********
+  
+lerobot-edit-dataset \
+    --repo_id revolabs/ball_sorting \
+    --operation.type delete_episodes \
+    --operation.episode_indices "[13]"
+    
 
 
 *********** Replay ***************
@@ -51,17 +65,17 @@ lerobot-record \
 lerobot-replay \
     --robot.type=revobots_hdi_follower \
     --robot.socket_ip="192.168.0.142" \
-    --dataset.repo_id=revolabs/ball_sorting \
-    --dataset.episode=0
+    --dataset.repo_id=revolabs/ball_sorting_single_trayR \
+    --dataset.episode=50
     
     
     
 ********** Train ****************
 
 lerobot-train \
-  --dataset.repo_id=revolabs/ball_sorting \
+  --dataset.repo_id=revolabs/ball_sorting_single_trayR \
   --policy.type=act \
-  --output_dir=outputs/train/act_ball_sorting \
+  --output_dir=outputs/train/act_ball_sorting_single_trayR \
   --job_name=act_ball_sorting \
   --policy.device=cuda \
   --wandb.enable=true \
@@ -69,6 +83,26 @@ lerobot-train \
   --policy.push_to_hub=false
 
 
+*********** Resume Training *******************
+
+lerobot-train \
+  --config_path=outputs/train/act_mutli_ball_sorting_mr/checkpoints/last/pretrained_model/train_config.json \
+  --resume=true
+
+
+********** Fine Tune ***************
+lerobot-train   \
+    --policy.type=act   \
+    --dataset.repo_id=revolabs/ball_sorting   \
+    --policy.pretrained_path=outputs/train/act_ball_sorting_single_m/checkpoints/last/pretrained_model   \
+    --output_dir=outputs/train/act_fine_tuned   \
+    --job_name=fine_tune_ball_sorting   \
+    --policy.device=cuda   \
+    --steps=50000   \
+    --wandb.enable=true \
+    --policy.push_to_hub=False
+    
+    
 ************ Inference *************
 
 python src/lerobot/scripts/lerobot_inference.py \
