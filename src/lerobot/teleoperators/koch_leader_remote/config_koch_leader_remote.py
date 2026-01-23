@@ -23,7 +23,7 @@ from ..config import TeleoperatorConfig
 @dataclass
 class KochLeaderRemoteConfig(TeleoperatorConfig):
     # Port to connect to the arm
-    port: str
+    port: int = 50001
 
     # Sets the arm in torque mode with the gripper motor set to this value. This makes it possible to squeeze
     # the gripper and have it spring back to an open position on its own.
