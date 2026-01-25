@@ -97,6 +97,7 @@ def main(cfg: InferenceConfig):
 
             # 6) Convert to robot action using dataset features
             robot_action = make_robot_action(action, dataset_metadata.features)
+            print(robot_action)
 
             # 7) Send action to robot
             robot.send_action(robot_action)
