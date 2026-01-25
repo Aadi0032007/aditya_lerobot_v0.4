@@ -48,7 +48,7 @@ def main(cfg: InferenceConfig):
     device = torch.device(cfg.device)
 
     # ✅ Load policy from OFFLINE path
-    policy = ACTPolicy.from_pretrained(cfg.policy_path).to(device)
+    policy = ACTPolicy.from_pretrained(cfg.policy_path)
     policy.eval()
 
     # ✅ Download ONLY dataset metadata (features + stats)
@@ -86,11 +86,11 @@ def main(cfg: InferenceConfig):
             )
 
             # 3) Preprocess
-            obs_proc = preprocessor(obs_frame)
+            obs = preprocessor(obs_frame)
 
             # 4) Policy inference
             with torch.no_grad():
-                action = policy.select_action(obs_proc, task=cfg.single_task)
+                action = policy.select_action(obs)
 
             # 5) Postprocess
             action = postprocessor(action)
