@@ -20,3 +20,6 @@ from .utils import TeleopEvents, make_teleoperator_from_config
 
 # added by Aadi for remote koch leader robot
 from . import koch_leader_remote
+
+# added by Aadi for bimanual koch leader robot
+from . import bi_koch_leader
