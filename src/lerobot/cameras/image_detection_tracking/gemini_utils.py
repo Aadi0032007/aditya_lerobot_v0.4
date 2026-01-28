@@ -48,14 +48,16 @@ def get_object_coordinates(image_input, prompt, api_key=None):
     Detects objects and returns their coordinates (bounding boxes and centroids).
     """
     # 1. Setup Client
-    os.environ["GOOGLE_API_KEY"] = "AIzaSyC_Q81EykOKuXwbyA3NV7EmSaQxnhuJXXs"
-
+    os.environ["GOOGLE_API_KEY"] = "" # Revolabs
+    
     key = api_key or os.environ.get("GOOGLE_API_KEY")
     if not key:
         raise ValueError("API Key not found. Set GOOGLE_API_KEY env var.")
     
     client = genai.Client(api_key=key)
     MODEL_ID = "gemini-robotics-er-1.5-preview"
+    # MODEL_ID = "gemini-3-flash-preview"
+    # MODEL_ID = 'gemini-2.5-flash-lite'
 
     # Handle Input (Ensure PIL for API)
     if isinstance(image_input, np.ndarray):
@@ -83,7 +85,9 @@ def get_object_coordinates(image_input, prompt, api_key=None):
     # Call Gemini
     config = types.GenerateContentConfig(
         temperature=0.5,
-        response_mime_type="application/json"
+        thinking_config=types.ThinkingConfig(
+          thinking_budget=0
+        )
     )
 
     try:
