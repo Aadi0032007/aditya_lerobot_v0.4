@@ -278,14 +278,14 @@ class RevobotsHdiFollowerInit(Robot):
         elif index == 2:
             return int(95 - int(value_deg)) * 3600
         elif index == 3:
-            return int((int(value_deg) - 90) * 3600)
+            return int((int(value_deg) - 75) * 3600)
         elif index == 5:
-            return int((133 - int(value_deg)) * 71.1111)
+            return int((- int(value_deg)) * 71.1111)
         elif index == 6:
-            return int(1250 + value_deg * 25.778)
+            return int(2200 + (50 - value_deg) * 25.778)
         else:
             return int(value_deg * 3600)
-
+        
     # ----------------- framework API -----------------
 
     def get_observation(self) -> dict[str, Any]:
@@ -331,7 +331,7 @@ class RevobotsHdiFollowerInit(Robot):
                 if v > 45.0:
                     v = 45.0
 
-                computed_g2 = 1654 + int((45.0 - v) * 25.778)
+                computed_g2 = 827 + int((v) * 25.778)
                 computed_g2 = max(0, min(65535, computed_g2))
 
                 b2 = int(computed_g2).to_bytes(2, "little", signed=False)
@@ -414,15 +414,16 @@ class RevobotsHdiFollowerInit(Robot):
                 "S ServoSetX 4 64 1",
                 "S ServoSetX 4 84 50",
                 "S ServoSetX 4 116 12 %54%08%00%00",
-                "a 0 0 0 0 0 8040 1972",
+                "a 0 0 0 0 0 0 1972",
                 # "S AngularSpeedStartAndEnd 10000",
+                # "S AngularSpeed 150000",
                 "S AngularSpeed 150000",
                 # "S AngularAcceleration 10000",
-                "S J1_PID_P 0.10",
-                "S J2_PID_P 0.10",
-                "S J3_PID_P 0.10",
-                "S J4_PID_P 0.10",
-                "S J5_PID_P 0.10"
+                "S J1_PID_P 0.120",
+                "S J2_PID_P 0.120",
+                "S J3_PID_P 0.120",
+                "S J4_PID_P 0.120",
+                "S J5_PID_P 0.120"
                 ]
 
         print("Initialization Started")
@@ -444,7 +445,7 @@ class RevobotsHdiFollowerInit(Robot):
 def main():
     robot_config = RevobotsHdiFollowerConfig(
         id="my_revobots_hdi_follower",
-        socket_ip="192.168.12.178",     # use your robot IP if it’s network-based
+        socket_ip="192.168.0.7",     # use your robot IP if it’s network-based
     )
     print("connecting")
     robot = RevobotsHdiFollowerInit(robot_config)
