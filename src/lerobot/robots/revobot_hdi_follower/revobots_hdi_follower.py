@@ -61,9 +61,10 @@ class RevobotsHdiFollower(Robot):
 
         self.logs: dict[str, float] = {}
 
-        # command dedup (same idea as prev_string / prev_string2)
         self._prev_cmd_main: str | None = None
         self._prev_cmd_gripper2: str | None = None
+
+    # ----------------- feature specs (required by Robot) -----------------
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -81,9 +82,42 @@ class RevobotsHdiFollower(Robot):
     def action_features(self) -> dict[str, type]:
         return self._motors_ft
 
+    # ----------------- connection helpers -----------------
+
+    def _connect_socket(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setblocking(True)
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        s.connect((self.config.socket_ip, int(self.config.socket_port)))
+        self.sock = s
+
+    def _is_socket_ok(self) -> bool:
+        return self.sock is not None and self.sock.fileno() >= 0
+
+    def _reset_connection(self):
+        logger.warning("Resetting connection to %s ...", self.name)
+        try:
+            if self.sock is not None:
+                try:
+                    self.sock.close()
+                except Exception:
+                    pass
+        finally:
+            self.sock = None
+
+        time.sleep(0.5)
+        self._connect_socket()
+        logger.info("Reconnected %s", self.name)
+
+    def _ensure_connected(self):
+        if not self._is_socket_ok():
+            self._reset_connection()
+
+    # ----------------- framework API -----------------
+
     @property
     def is_connected(self) -> bool:
-        return self.sock is not None and self.sock.fileno() >= 0
+        return self._is_socket_ok()
 
     @property
     def is_calibrated(self) -> bool:
@@ -93,11 +127,7 @@ class RevobotsHdiFollower(Robot):
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self.name} is already connected.")
 
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setblocking(True)
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        s.connect((self.config.socket_ip, int(self.config.socket_port)))
-        self.sock = s
+        self._connect_socket()
 
         for cam in self.cameras.values():
             cam.connect()
@@ -121,15 +151,61 @@ class RevobotsHdiFollower(Robot):
 
         try:
             if self.config.disable_torque_on_disconnect:
-                # If you have a torque-off command, send it here.
                 pass
         finally:
             try:
-                self.sock.close()  # type: ignore[union-attr]
+                if self.sock:
+                    self.sock.close()
             finally:
                 self.sock = None
 
         logger.info("Disconnected %s", self.name)
+
+    # ----------------- socket primitives -----------------
+
+    def _safe_send(self, data: bytes):
+        self._ensure_connected()
+        try:
+            assert self.sock is not None
+            self.sock.send(data)
+        except Exception as e:
+            logger.error("Send failed (%s), reconnecting...", e)
+            self._reset_connection()
+            assert self.sock is not None
+            self.sock.send(data)
+
+    def _recv_exact(self, n: int) -> bytes:
+        self._ensure_connected()
+        assert self.sock is not None
+
+        try:
+            chunks: list[bytes] = []
+            remaining = n
+            while remaining > 0:
+                part = self.sock.recv(remaining)
+                if not part:
+                    raise ConnectionError("Socket closed during recv")
+                chunks.append(part)
+                remaining -= len(part)
+            return b"".join(chunks)
+
+        except Exception as e:
+            logger.error("Recv failed (%s), reconnecting...", e)
+            self._reset_connection()
+
+            # retry once
+            chunks = []
+            remaining = n
+            assert self.sock is not None
+            while remaining > 0:
+                part = self.sock.recv(remaining)
+                if not part:
+                    break
+                chunks.append(part)
+                remaining -= len(part)
+            return b"".join(chunks)
+
+    # ----------------- robot protocol -----------------
 
     def configure(self) -> None:
         return
@@ -139,18 +215,6 @@ class RevobotsHdiFollower(Robot):
 
     def setup_motors(self) -> None:
         return
-
-    def _recv_exact(self, n: int) -> bytes:
-        assert self.sock is not None
-        chunks: list[bytes] = []
-        remaining = n
-        while remaining > 0:
-            part = self.sock.recv(remaining)
-            if not part:
-                break
-            chunks.append(part)
-            remaining -= len(part)
-        return b"".join(chunks)
 
     def _parse_packet(self, raw: bytes) -> None:
         total_len = len(raw)
@@ -192,15 +256,6 @@ class RevobotsHdiFollower(Robot):
         if not self.is_connected:
             return {}
 
-        assert self.sock is not None
-
-        command = "xxx xxx xxx xxx F;"
-        self.sock.send(command.encode("utf-8"))
-
-        raw = self._recv_exact(self.RECV_NBYTES)
-        if raw:
-            self._parse_packet(raw)
-
         deg_list = self._decode_positions_degrees()
 
         state_deg: dict[str, float] = {}
@@ -213,12 +268,14 @@ class RevobotsHdiFollower(Robot):
 
         return {k: float(np.deg2rad(v)) for k, v in state_deg.items()}
 
+    # ----------------- command building -----------------
+
     def _revobot_robot_offset(self, index: int, value_deg: float) -> int:
         if index == 0:
             return int(value_deg * -1 * 3600)
         elif index == 1:
             return int((int(value_deg) + 40) * 3600)
-        elif index == 2:	
+        elif index == 2:
             return int(95 - int(value_deg)) * 3600
         elif index == 3:
             return int((int(value_deg) - 90) * 3600)
@@ -228,6 +285,8 @@ class RevobotsHdiFollower(Robot):
             return int(1250 + value_deg * 17.778)
         else:
             return int(value_deg * 3600)
+
+    # ----------------- framework API -----------------
 
     def get_observation(self) -> dict[str, Any]:
         obs: dict[str, Any] = {}
@@ -243,8 +302,7 @@ class RevobotsHdiFollower(Robot):
 
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
         if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self.name} is not connected.")
-        assert self.sock is not None
+            self._reset_connection()
 
         t0 = time.perf_counter()
 
@@ -254,12 +312,10 @@ class RevobotsHdiFollower(Robot):
             key = f"{name}.pos"
             values_list.append(float(action.get(key, 0.0)))
 
-
         # legacy quirk
         if len(values_list) < 7:
             values_list.insert(4, 0.0)
-            
-        # build main command and special gripper2 command (if i==6)
+
         command2: str | None = None
 
         command = "xxx xxx xxx xxx P"
@@ -269,38 +325,19 @@ class RevobotsHdiFollower(Robot):
                 command += " " + str(computed)
 
             if i == 6:
-                # Clamp gripper angle to a sane range for this firmware mapping
                 v = float(value)
                 if v < 0.0:
                     v = 0.0
                 if v > 45.0:
                     v = 45.0
-            
-                # Gripper-1 steps already computed by _revobot_robot_offset(i, value)
-                # Ensure uint16 range for packing
-                g1_steps = int(computed)
-                if g1_steps < 0:
-                    g1_steps = 0
-                if g1_steps > 65535:
-                    g1_steps = 65535
-            
-                b = g1_steps.to_bytes(2, "little", signed=False)
-                data3 = format(b[0], "02x")
-                data4 = format(b[1], "02x")
-            
-                # Gripper-2 steps derived from clamped v
+
                 computed_g2 = 2054 + int((45.0 - v) * 17.778)
-            
-                # Clamp to uint16 before packing
-                if computed_g2 < 0:
-                    computed_g2 = 0
-                if computed_g2 > 65535:
-                    computed_g2 = 65535
-            
+                computed_g2 = max(0, min(65535, computed_g2))
+
                 b2 = int(computed_g2).to_bytes(2, "little", signed=False)
                 data1 = format(b2[0], "02x")
                 data2 = format(b2[1], "02x")
-            
+
                 command2 = (
                     "xxx xxx xxx xxx S ServoSetX 4 116 12 %"
                     + str(data1)
@@ -308,29 +345,27 @@ class RevobotsHdiFollower(Robot):
                     + str(data2)
                     + "%00%00;"
                 )
-            
-                # (optional, only if you decide to send it later)
-                # command3 = (
-                #      "xxx xxx xxx xxx S ServoSetX 1 116 12 %"
-                #      + str(data3)
-                #      + "%"
-                #      + str(data4)
-                #      + "%00%00;"
-                #  )
 
         command += ";"
 
-        # dedup + send order same as your snippet
+        # send gripper2
         if command2 is not None and self._prev_cmd_gripper2 != command2:
-            self.sock.send(command2.encode("utf-8"))
+            self._safe_send(command2.encode("utf-8"))
             self._prev_cmd_gripper2 = command2
             time.sleep(0.005)
-        
 
+        # send main P
+        sent_p = False
         if self._prev_cmd_main != command:
-            self.sock.send(command.encode("utf-8"))
-            #print(command)
+            self._safe_send(command.encode("utf-8"))
             self._prev_cmd_main = command
+            sent_p = True
+
+        # recv exactly one packet after P
+        if sent_p:
+            raw = self._recv_exact(self.RECV_NBYTES)
+            if raw:
+                self._parse_packet(raw)
 
         self.logs["write_pos_dt_s"] = time.perf_counter() - t0
         return action
