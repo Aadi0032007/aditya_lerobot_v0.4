@@ -149,17 +149,40 @@ class RevobotsHdiFollower(Robot):
             except Exception:
                 pass
 
+        # try:
+        #     if self.config.disable_torque_on_disconnect:
+        #         pass
+        # finally:
         try:
-            if self.config.disable_torque_on_disconnect:
-                pass
+            if self.sock:
+                self.sock.close()
         finally:
-            try:
-                if self.sock:
-                    self.sock.close()
-            finally:
-                self.sock = None
+            self.sock = None
 
         # logger.info("Disconnected %s", self.name)
+        
+    def reconnect_robot(self, calibrate: bool = True) -> None:
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self.name} is not connected.")
+            
+        try:
+            if self.sock:
+                self.sock.close()
+        finally:
+            self.sock = None
+            
+        if self.is_connected:
+            raise DeviceAlreadyConnectedError(f"{self.name} is already connected.")
+
+        self._connect_socket()
+        
+        self.configure()
+        if calibrate:
+            self.calibrate()
+        self.setup_motors()
+
+        # logger.info("Connected %s to %s:%s", self.name, self.config.socket_ip, self.config.socket_port)
+
 
     # ----------------- socket primitives -----------------
 
@@ -301,6 +324,38 @@ class RevobotsHdiFollower(Robot):
             return int(2200 + (50 - value_deg) * 25.778)
         else:
             return int(value_deg * 3600)
+        
+    def ava_right_arm_offset(self, index: int, value_deg: float) -> int:
+        if index == 0:
+            return int(value_deg * -1 * 3600)
+        elif index == 1:
+            return int((int(value_deg) + 40) * 3600)
+        elif index == 2:
+            return int(95 - int(value_deg)) * 3600
+        elif index == 3:
+            return int((int(value_deg) - 75) * 3600)
+        elif index == 5:
+            return int((63 - int(value_deg)) * 71.1111)
+        elif index == 6:
+            return int(2200 + (50 - value_deg) * 25.778)
+        else:
+            return int(value_deg * 3600)
+        
+    def ava_left_arm_offset(self, index: int, value_deg: float) -> int:
+        if index == 0:
+            return int(value_deg * -1 * 3600)
+        elif index == 1:
+            return int((int(value_deg) + 40) * 3600 * -1)
+        elif index == 2:
+            return int(95 - int(value_deg)) * 3600 * -1
+        elif index == 3:
+            return int((int(value_deg) + 75) * 3600)
+        elif index == 5:
+            return int((-63 - int(value_deg)) * 71.1111)
+        elif index == 6:
+            return int(2200 + (50 - value_deg) * 25.778)
+        else:
+            return int(value_deg * 3600)
 
 
     # ----------------- framework API -----------------
@@ -317,7 +372,7 @@ class RevobotsHdiFollower(Robot):
 
         return obs
 
-    def send_action(self, action: dict[str, float]) -> dict[str, float]:
+    def send_action(self, action: dict[str, float], flag_delay = False) -> dict[str, float]:
         if not self.is_connected:
             self._reset_connection()
 
@@ -339,8 +394,14 @@ class RevobotsHdiFollower(Robot):
         for i, value in enumerate(values_list):
             if self.config.socket_ip == "192.168.0.142":
                 computed = self._revobot_hdi_offset(i, float(value))
-            elif self.config.socket_ip == "192.168.12.178":
+            elif self.config.socket_ip == "192.168.0.7":
                 computed = self._revobot_miniD_offset(i, float(value))
+            elif self.config.socket_ip == "100.87.226.50":
+                computed = self.ava_right_arm_offset(i, float(value)) 
+            elif self.config.socket_ip == "100.79.109.42":
+                computed = self.ava_left_arm_offset(i, float(value)) 
+            else:
+                computed = self._revobot_hdi_offset(i, float(value))
                 
             if i < 7:
                 command += " " + str(computed)
@@ -351,9 +412,26 @@ class RevobotsHdiFollower(Robot):
                     v = 0.0
                 if v > 45.0:
                     v = 45.0
-
-                computed_g2 = 1654 + int((45.0 - v) * 25.778)
-                computed_g2 = max(0, min(65535, computed_g2))
+                
+                if self.config.socket_ip == "192.168.0.142":
+                    computed_g2 = 1654 + int((45.0 - v) * 25.778)
+                    computed_g2 = max(0, min(65535, computed_g2))
+                
+                elif self.config.socket_ip == "192.168.0.7":
+                    computed_g2 = 827 + int((v) * 25.778)
+                    computed_g2 = max(0, min(65535, computed_g2))
+                
+                elif self.config.socket_ip == "100.79.109.42":
+                    computed_g2 = 827 + int((v) * 25.778)
+                    computed_g2 = max(0, min(65535, computed_g2))
+                    
+                elif self.config.socket_ip == "100.87.226.50":
+                    computed_g2 = 827 + int((v) * 25.778)
+                    computed_g2 = max(0, min(65535, computed_g2))
+                    
+                else:
+                    computed_g2 = 1654 + int((45.0 - v) * 25.778)
+                    computed_g2 = max(0, min(65535, computed_g2))
 
                 b2 = int(computed_g2).to_bytes(2, "little", signed=False)
                 data1 = format(b2[0], "02x")
@@ -378,15 +456,26 @@ class RevobotsHdiFollower(Robot):
         # send main P
         sent_p = False
         if self._prev_cmd_main != command:
+            t1 = time.perf_counter()
             self._safe_send(command.encode("utf-8"))
             self._prev_cmd_main = command
             sent_p = True
+            time.sleep(0.005) #PID Move requires delay to get all motors in sync
+            dt = time.perf_counter() - t1
+            # print(f"time to send : {dt:.6f} s")
+    
+        if flag_delay == True:
+            time.sleep(6)
+            flag_delay == False
 
         # recv exactly one packet after P
         if sent_p:
+            t1 = time.perf_counter()
             raw = self._recv_exact(self.RECV_NBYTES)
             if raw:
                 self._parse_packet(raw)
+            dt = time.perf_counter() - t1
+            # print(f"time to recv : {dt:.6f} s")
 
         self.logs["write_pos_dt_s"] = time.perf_counter() - t0
-        return action
+        # return action
