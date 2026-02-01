@@ -250,7 +250,7 @@ def run_inference(
     """
 
     init_logging()
-    logging.info("Starting inference")
+    # logging.info("Starting inference")
 
     if display_data:
         init_rerun(session_name="inference")
@@ -274,7 +274,7 @@ def run_inference(
     preprocessor.reset()
     postprocessor.reset()
 
-    log_say(f"Running inference for {duration_s:.1f}s")
+    # log_say(f"Running inference for {duration_s:.1f}s")
 
     inference_loop(
         robot=robot,
@@ -290,7 +290,7 @@ def run_inference(
         display_data=display_data,
     )
 
-    log_say("Inference finished")
+    # log_say("Inference finished")
     
 
 def run_inference_with_markers(
@@ -313,7 +313,7 @@ def run_inference_with_markers(
     """
 
     init_logging()
-    logging.info("Starting inference")
+    # logging.info("Starting inference")
 
     if display_data:
         init_rerun(session_name="inference")
@@ -337,7 +337,7 @@ def run_inference_with_markers(
     preprocessor.reset()
     postprocessor.reset()
 
-    log_say(f"Running inference for {duration_s:.1f}s")
+    # log_say(f"Running inference for {duration_s:.1f}s")
 
     inference_loop_with_markers(
         robot=robot,
@@ -354,4 +354,4 @@ def run_inference_with_markers(
         prompt=prompt
     )
 
-    log_say("Inference finished")
+    # log_say("Inference finished")
