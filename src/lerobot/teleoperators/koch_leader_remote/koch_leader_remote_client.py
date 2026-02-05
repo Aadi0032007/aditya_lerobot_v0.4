@@ -78,7 +78,7 @@ def run_remote_client(server_ip, port, robot_id, fps):
 
         except (ConnectionRefusedError, socket.timeout, ConnectionResetError):
             print("[Client] Server lost. Retrying in 2 seconds...")
-            time.sleep(2)
+            time.sleep(0.05)
         finally:
             if client_sock: client_sock.close()
 
