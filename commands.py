@@ -12,8 +12,8 @@ Created on Tue Jan 27 11:33:36 2026
 
 lerobot-calibrate \
     --teleop.type=koch_leader \
-    --teleop.port=/dev/ttyACM1 \
-    --teleop.id=rahul
+    --teleop.port=/dev/ttyACM0 \
+    --teleop.id=mike_black_left
     
 
 *********** HDI INIT*******************
@@ -25,12 +25,15 @@ python src/lerobot/robots/revobot_hdi_follower/hdi_initialisation.py
 lerobot-teleoperate \
   --robot.type=revobots_hdi_follower \
   --robot.cameras='{}' \
-  --robot.socket_ip="127.0.0.1" \
+  --robot.socket_ip="100.87.226.50" \
   --teleop.type=koch_leader \
   --teleop.port=/dev/ttyACM0 \
-  --teleop.id=rahul \
-  --display_data=true
+  --teleop.id=mike_white_right \
+  --display_data=false
+  
+************* Ava Teleop *****************
 
+python src/lerobot/robots/revobot_hdi_follower/aadi_teleoprate_ava.py 
 
 
 ************ Recording **************
@@ -127,5 +130,19 @@ training checkpoint data :
 
 ACT config file for hyper parameter tuning:
     /home/revolabs/aditya/aditya_lerobot_v0.4/src/lerobot/policies/act
+    
+    
+    
+******************* For DEMO ****************************
 
+python demo_revobots_replay.py
+
+python demo_revobots_inference.py  # to run all the balls at one go from left to right
+
+python demo_revobots_inference.py  --prompt="object of interest"  # to run with a written prompt
+
+python demo_revobots_inference.py --prompt="speech" # to run with speech/voice command
+
+cd Desktop/Documents/orbital-soup
+bash startup_orbital.sh
 """
