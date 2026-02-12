@@ -170,10 +170,10 @@ def inference_loop_with_markers(
 ):
     from lerobot.cameras.image_detection_tracking.gemini_utils import draw_markers_on_image, get_object_coordinates 
     
-    start_t = time.perf_counter()
-    
     obs = robot.get_observation()
     coord = get_object_coordinates(obs['phone'], prompt)
+    
+    start_t = time.perf_counter()
     
     while (time.perf_counter() - start_t) < duration_s:
         loop_t = time.perf_counter()
