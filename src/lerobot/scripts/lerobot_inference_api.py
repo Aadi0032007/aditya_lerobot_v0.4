@@ -172,6 +172,7 @@ def inference_loop_with_markers(
     
     obs = robot.get_observation()
     coord = get_object_coordinates(obs['phone'], prompt)
+    print(coord)
     
     start_t = time.perf_counter()
     
@@ -183,6 +184,7 @@ def inference_loop_with_markers(
         
         # Place markers
         obs['phone'] = draw_markers_on_image(obs['phone'], coord)
+        print("placing marker")
         
         obs_processed = robot_observation_processor(obs)
 
