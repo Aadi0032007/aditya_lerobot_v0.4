@@ -18,7 +18,7 @@ from google.genai import types
 def put_the_marker(
     image: np.ndarray,
     coords: tuple,
-    radius=10,
+    radius=15,
     border_color=(255, 0, 0),  # Note: In RGB, this is Blue. In BGR, this is Red.
     cross_color=(255, 0, 0),   
     bg_color=(255, 255, 255),  # white fill
@@ -142,8 +142,8 @@ def draw_markers_on_image(image_input, detections):
         ymin, xmin, ymax, xmax = item["box"]
         centroid = item["centroid"]
         
-        # 1. Draw Bounding Box (Green, thickness 2)
-        cv2.rectangle(img, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
+        # # 1. Draw Bounding Box (Green, thickness 2)
+        # cv2.rectangle(img, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
         # 2. Draw Marker (Centroid) using the specific function
         put_the_marker(img, centroid)
