@@ -166,7 +166,7 @@ def inference_loop_with_markers(
     fps: int,
     duration_s: float,
     display_data: bool,
-    prompt: str | "object"
+    prompt: str | None
 ):
     from lerobot.cameras.image_detection_tracking.gemini_utils import draw_markers_on_image, get_object_coordinates 
     
@@ -302,7 +302,7 @@ def run_inference_with_markers(
     single_task: str | None = None,
     display_data: bool = False,
     rename_map: dict[str, str] | None = None,
-    prompt: str | "object"
+    prompt: str | None
 ):
     """
     Runs policy inference on an already-initialized and connected robot.
