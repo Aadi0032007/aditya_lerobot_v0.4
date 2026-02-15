@@ -12,8 +12,8 @@ Created on Tue Jan 27 11:33:36 2026
 
 lerobot-calibrate \
     --teleop.type=koch_leader \
-    --teleop.port=/dev/ttyACM0 \
-    --teleop.id=mike_black_left
+    --teleop.port=COM3 \
+    --teleop.id=adi
     
 
 *********** HDI INIT*******************
@@ -40,17 +40,17 @@ python src/lerobot/robots/revobot_hdi_follower/aadi_teleoprate_ava.py
 
 lerobot-record \
   --robot.type=revobots_hdi_follower \
-  --robot.cameras='{ phone: {"type": "opencv", "index_or_path": 0, "width": 640, "height": 480, "fps": 30}, wrist_1: {"type": "opencv", "index_or_path": 2, "width": 640, "height": 480, "fps": 30}}' \
+  --robot.cameras='{ phone: {"type": "opencv", "index_or_path": 0, "width": 640, "height": 480, "fps": 30}}' \
   --robot.socket_ip="192.168.0.142" \
   --teleop.type=koch_leader \
   --teleop.port=/dev/ttyACM0 \
   --teleop.id=rahul \
   --display_data=true \
-  --dataset.repo_id=revolabs/ball_sorting \
-  --dataset.episode_time_s=60 \  
+  --dataset.repo_id=revolabs/scout_can_grabbing_001 \
+  --dataset.episode_time_s=3600 \  
   --dataset.num_episodes=100 \
   --dataset.reset_time_s=5 \
-  --dataset.single_task="picking the ball and placing in the basket" \
+  --dataset.single_task="grabbing the can" \
   --dataset.push_to_hub=False 
   
   
@@ -76,10 +76,10 @@ lerobot-replay \
 ********** Train ****************
 
 lerobot-train \
-  --dataset.repo_id=revolabs/ball_sorting_single_trayR \
+  --dataset.repo_id=revolabs/scout_can_grabbing_001 \
   --policy.type=act \
-  --output_dir=outputs/train/act_ball_sorting_single_trayR \
-  --job_name=act_ball_sorting \
+  --output_dir=outputs/train/act_scout_can_grabbing_001 \
+  --job_name=act_scout_can_grabbing_001 \
   --policy.device=cuda \
   --wandb.enable=true \
   --policy.repo_id=revolabs/act_policy \
