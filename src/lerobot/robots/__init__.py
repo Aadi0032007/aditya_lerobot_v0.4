@@ -23,3 +23,6 @@ from . import revobot_hdi_follower
 
 # added by Aadi for Bimanual Revobot's HDI Follower Robot
 from . import bi_revobots_hdi_follower
+
+# added by Aadi for WidowX Follower Robot
+from . import widowx_follower
