@@ -72,6 +72,10 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .bi_revobots_hdi_follower.bi_revobots_hdi_follower import BiRevobotsHdiFollower
 
         return BiRevobotsHdiFollower(config)
+    elif config.type == "widowx_follower":
+        from .widowx_follower.widowx_follower import WidowXFollower
+
+        return WidowXFollower(config)
     else:
         try:
             return cast(Robot, make_device_from_device_class(config))
