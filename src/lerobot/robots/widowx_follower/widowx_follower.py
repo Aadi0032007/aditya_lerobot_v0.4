@@ -54,7 +54,7 @@ class WidowXFollower(Robot):
                 "elbow_flex_mirror": Motor(5, "xm430-w350", norm_mode_body),
                 "wrist_flex": Motor(7, "xm430-w350", norm_mode_body),
                 "wrist_roll": Motor(8, "xm430-w350", norm_mode_body),
-                "gripper": Motor(9, "xl330-m288", MotorNormMode.RANGE_0_100),
+                "gripper": Motor(9, "xc430-w150", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )
