@@ -5,6 +5,13 @@ Created on Mon Apr 13 12:24:43 2026
 @author: Aadi
 """
 
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Apr 13 12:24:43 2026
+
+@author: Aadi
+"""
+
 import logging
 import time
 from functools import cached_property
@@ -34,12 +41,17 @@ class WidowXFollower(Robot):
         super().__init__(config)
         self.config = config
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
+        
+        # Added ID 3 (mirror of 2) and ID 5 (mirror of 4)
+        # ID 6 is intentionally omitted to avoid disturbing it
         self.bus = DynamixelMotorsBus(
             port=self.config.port,
             motors={
                 "shoulder_pan": Motor(1, "xm430-w350", norm_mode_body),
                 "shoulder_lift": Motor(2, "xm430-w350", norm_mode_body),
+                "shoulder_lift_mirror": Motor(3, "xm430-w350", norm_mode_body),
                 "elbow_flex": Motor(4, "xm430-w350", norm_mode_body),
+                "elbow_flex_mirror": Motor(5, "xm430-w350", norm_mode_body),
                 "wrist_flex": Motor(7, "xm430-w350", norm_mode_body),
                 "wrist_roll": Motor(8, "xm430-w350", norm_mode_body),
                 "gripper": Motor(9, "xl330-m288", MotorNormMode.RANGE_0_100),
@@ -50,7 +62,13 @@ class WidowXFollower(Robot):
 
     @property
     def _motors_ft(self) -> dict[str, type]:
-        return {f"{motor}.pos": float for motor in self.bus.motors}
+        # We only expose the primary joints to the features list
+        # Mirror joints (ID 3, 5) are handled internally
+        return {
+            f"{motor}.pos": float 
+            for motor in self.bus.motors 
+            if "mirror" not in motor
+        }
 
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
@@ -71,18 +89,12 @@ class WidowXFollower(Robot):
         return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
 
     def connect(self, calibrate: bool = True) -> None:
-        """
-        We assume that at connection time, arm is in a rest position,
-        and torque can be safely disabled to run calibration.
-        """
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
 
         self.bus.connect()
         if not self.is_calibrated and calibrate:
-            logger.info(
-                "Mismatch between calibration values in the motor and the calibration file or no calibration file found"
-            )
+            logger.info("Mismatch between calibration values or no calibration file found")
             self.calibrate()
 
         for cam in self.cameras.values():
@@ -98,14 +110,11 @@ class WidowXFollower(Robot):
     def calibrate(self) -> None:
         self.bus.disable_torque()
         if self.calibration:
-            # Calibration file exists, ask user whether to use it or run new calibration
-            user_input = input(
-                f"Press ENTER to use provided calibration file associated with the id {self.id}, or type 'c' and press ENTER to run calibration: "
-            )
+            user_input = input(f"Press ENTER to use calibration for id {self.id}, or 'c' to recalibrate: ")
             if user_input.strip().lower() != "c":
-                logger.info(f"Writing calibration file associated with the id {self.id} to the motors")
                 self.bus.write_calibration(self.calibration)
                 return
+        
         logger.info(f"\nRunning calibration of {self}")
         for motor in self.bus.motors:
             self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
@@ -114,12 +123,12 @@ class WidowXFollower(Robot):
         homing_offsets = self.bus.set_half_turn_homings()
 
         full_turn_motors = ["shoulder_pan", "wrist_roll"]
+        # Mirrors also need their ranges recorded
         unknown_range_motors = [motor for motor in self.bus.motors if motor not in full_turn_motors]
-        print(
-            f"Move all joints except {full_turn_motors} sequentially through their entire "
-            "ranges of motion.\nRecording positions. Press ENTER to stop..."
-        )
+        
+        print(f"Move joints through ranges. Press ENTER to stop...")
         range_mins, range_maxes = self.bus.record_ranges_of_motion(unknown_range_motors)
+        
         for motor in full_turn_motors:
             range_mins[motor] = 0
             range_maxes[motor] = 4095
@@ -136,93 +145,75 @@ class WidowXFollower(Robot):
 
         self.bus.write_calibration(self.calibration)
         self._save_calibration()
-        logger.info(f"Calibration saved to {self.calibration_fpath}")
 
     def configure(self) -> None:
         with self.bus.torque_disabled():
             self.bus.configure_motors()
-            # Use 'extended position mode' for all motors except gripper, because in joint mode the servos
-            # can't rotate more than 360 degrees (from 0 to 4095) And some mistake can happen while assembling
-            # the arm, you could end up with a servo with a position 0 or 4095 at a crucial point
             for motor in self.bus.motors:
                 if motor != "gripper":
                     self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
 
-            # Use 'position control current based' for gripper to be limited by the limit of the current. For
-            # the follower gripper, it means it can grasp an object without forcing too much even tho, its
-            # goal position is a complete grasp (both gripper fingers are ordered to join and reach a touch).
-            # For the leader gripper, it means we can use it as a physical trigger, since we can force with
-            # our finger to make it move, and it will move back to its original target position when we
-            # release the force.
             self.bus.write("Operating_Mode", "gripper", OperatingMode.CURRENT_POSITION.value)
 
-            # Set better PID values to close the gap between recorded states and actions
-            # TODO(rcadene): Implement an automatic procedure to set optimal PID values for each motor
-            self.bus.write("Position_P_Gain", "elbow_flex", 1500)
-            self.bus.write("Position_I_Gain", "elbow_flex", 0)
-            self.bus.write("Position_D_Gain", "elbow_flex", 600)
-
-    def setup_motors(self) -> None:
-        for motor in reversed(self.bus.motors):
-            input(f"Connect the controller board to the '{motor}' motor only and press enter.")
-            self.bus.setup_motor(motor)
-            print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
+            # PID for elbow flex (applying to both 4 and 5)
+            for m_name in ["elbow_flex", "elbow_flex_mirror"]:
+                self.bus.write("Position_P_Gain", m_name, 1500)
+                self.bus.write("Position_I_Gain", m_name, 0)
+                self.bus.write("Position_D_Gain", m_name, 600)
 
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        # Read arm position
         start = time.perf_counter()
-        obs_dict = self.bus.sync_read("Present_Position")
-        obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
+        full_obs = self.bus.sync_read("Present_Position")
+        
+        # We strip the mirror joints from the final observation dict to keep 
+        # it consistent with action_features, but they are read from the bus.
+        obs_dict = {
+            f"{motor}.pos": val 
+            for motor, val in full_obs.items() 
+            if "mirror" not in motor
+        }
+        
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
-        # Capture images from cameras
         for cam_key, cam in self.cameras.items():
-            start = time.perf_counter()
             obs_dict[cam_key] = cam.async_read()
-            dt_ms = (time.perf_counter() - start) * 1e3
-            logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
         return obs_dict
 
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
-        """Command arm to move to a target joint configuration.
-
-        The relative action magnitude may be clipped depending on the configuration parameter
-        `max_relative_target`. In this case, the action sent differs from original action.
-        Thus, this function always returns the action actually sent.
-
-        Args:
-            action (dict[str, float]): The goal positions for the motors.
-
-        Returns:
-            dict[str, float]: The action sent to the motors, potentially clipped.
-        """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
-        # Cap goal position when too far away from present position.
-        # /!\ Slower fps expected due to reading from the follower.
+        # --- Mirroring Logic Implementation ---
+        # Derive ID 3 from ID 2
+        if "shoulder_lift" in goal_pos:
+            # Mirroring: x -> -x (In LeRobot/Dynamixel context, this handles the physical inversion)
+            goal_pos["shoulder_lift_mirror"] = -goal_pos["shoulder_lift"]
+            
+        # Derive ID 5 from ID 4
+        if "elbow_flex" in goal_pos:
+            goal_pos["elbow_flex_mirror"] = -goal_pos["elbow_flex"]
+
         if self.config.max_relative_target is not None:
             present_pos = self.bus.sync_read("Present_Position")
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
-        # Send goal position to the arm
         self.bus.sync_write("Goal_Position", goal_pos)
-        return {f"{motor}.pos": val for motor, val in goal_pos.items()}
+        
+        # Return only the primary joints in the action confirmation
+        return {f"{motor}.pos": val for motor, val in goal_pos.items() if "mirror" not in motor}
 
     def disconnect(self):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-
         self.bus.disconnect(self.config.disable_torque_on_disconnect)
         for cam in self.cameras.values():
             cam.disconnect()
-
         logger.info(f"{self} disconnected.")
