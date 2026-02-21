@@ -270,7 +270,7 @@ class RevobotsHdiFollower(Robot):
 
     # ----------------- command building -----------------
 
-    def _revobot_robot_offset(self, index: int, value_deg: float) -> int:
+    def _revobot_hdi_offset(self, index: int, value_deg: float) -> int:
         if index == 0:
             return int(value_deg * -1 * 3600)
         elif index == 1:
@@ -285,6 +285,23 @@ class RevobotsHdiFollower(Robot):
             return int(1250 + value_deg * 25.778)
         else:
             return int(value_deg * 3600)
+        
+    def _revobot_miniD_offset(self, index: int, value_deg: float) -> int:
+        if index == 0:
+            return int(value_deg * -1 * 3600)
+        elif index == 1:
+            return int((int(value_deg) + 40) * 3600)
+        elif index == 2:
+            return int(95 - int(value_deg)) * 3600
+        elif index == 3:
+            return int((int(value_deg) - 75) * 3600)
+        elif index == 5:
+            return int((- int(value_deg)) * 71.1111)
+        elif index == 6:
+            return int(2200 + (50 - value_deg) * 25.778)
+        else:
+            return int(value_deg * 3600)
+
 
     # ----------------- framework API -----------------
 
@@ -320,7 +337,11 @@ class RevobotsHdiFollower(Robot):
 
         command = "xxx xxx xxx xxx P"
         for i, value in enumerate(values_list):
-            computed = self._revobot_robot_offset(i, float(value))
+            if self.config.socket_ip == "192.168.0.142":
+                computed = self._revobot_hdi_offset(i, float(value))
+            elif self.config.socket_ip == "192.168.12.178":
+                computed = self._revobot_miniD_offset(i, float(value))
+                
             if i < 7:
                 command += " " + str(computed)
 
