@@ -73,20 +73,38 @@ class KochLeaderRemote(Teleoperator):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        if self.client_conn is None:
-            self._wait_for_client()
-            return {} # Return empty until client connects
+        while True:
+            # 1. If no client is connected, try to accept one
+            if self.client_conn is None:
+                print("waiting for data from remote teleoperator")
+                self._wait_for_client()
+                if self.client_conn is None:
+                    continue  # Keep looping until a client connects
 
-        try:
-            self.client_conn.sendall(b"GET_ACTION\n")
-            data = self.client_conn.recv(1024).decode('utf-8')
-            if not data:
-                raise ConnectionError("Client disconnected.")
-            return json.loads(data)
-        except (ConnectionError, socket.timeout, Exception) as e:
-            logger.warning(f"Connection lost: {e}. Waiting for reconnection...")
-            self.client_conn = None
-            return {}
+            try:
+                # 2. Request data from the client
+                self.client_conn.sendall(b"GET_ACTION\n")
+                data = self.client_conn.recv(1024).decode('utf-8').strip()
+
+                # 3. Check if data is empty or connection closed
+                if not data:
+                    print("waiting for data from remote teleoperator")
+                    self.client_conn = None  # Reset connection to trigger reconnection logic
+                    continue
+
+                # 4. Parse JSON and ensure it contains action data
+                action = json.loads(data)
+                if action:  # Only return if the dictionary is not empty
+                    return action
+                
+                # If JSON was valid but empty (e.g. {}), print and loop again
+                print("waiting for data from remote teleoperator")
+
+            except (ConnectionError, socket.timeout, Exception):
+                # 5. Handle crashes or timeouts by resetting the connection
+                print("waiting for data from remote teleoperator")
+                self.client_conn = None
+                # The loop will automatically attempt to reconnect via _wait_for_client()
 
     def calibrate(self) -> None: pass
     def configure(self) -> None: pass
