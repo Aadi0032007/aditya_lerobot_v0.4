@@ -28,7 +28,7 @@ def precise_sleep(duration):
         time.sleep(duration)
 
 def run_remote_client(server_ip, port, robot_id, fps):
-    config = KochLeaderConfig(port="COM3", id=robot_id, gripper_open_pos=50.0)
+    config = KochLeaderConfig(port="COM3", id=robot_id, gripper_open_pos=45.0)
     leader = KochLeader(config)
 
     print("-" * 50)
