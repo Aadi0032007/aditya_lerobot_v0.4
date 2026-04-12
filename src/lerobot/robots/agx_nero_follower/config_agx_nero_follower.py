@@ -35,10 +35,10 @@ class AgxNeroFollowerConfig(RobotConfig):
     interface: str | None = None
     channel: str | None = None
     # Firmware version — "default" (<=1.10) | "v111" (>=1.11)
-    firmware_version: str = "default"
+    firmware_version: str = "v111"
     bitrate: int = 1_000_000
     # Motion speed 0-100%
-    speed_percent: int = 50
+    speed_percent: int = 20
     # Max per-step joint movement (degrees). None = unlimited.
     max_relative_target: float | dict[str, float] | None = None
     disable_on_disconnect: bool = True
