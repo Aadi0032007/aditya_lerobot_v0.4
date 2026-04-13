@@ -191,6 +191,13 @@ class AgxNeroFollower(Robot):
             max(JOINT_LIMITS_DEG[name][0], min(JOINT_LIMITS_DEG[name][1], v))
             for name, v in zip(JOINT_NAMES, goal_deg)
         ]
+        
+        # Force indices 3 and 5 to zero
+        for i in [2, 5]:
+            if i < len(goal_deg):
+                goal_deg[i] = 0.0
+                
+        goal_deg[4], goal_deg[6] = goal_deg[6], goal_deg[4]
 
         # Apply max_relative_target safety cap if configured
         if self.config.max_relative_target is not None:
@@ -202,6 +209,7 @@ class AgxNeroFollower(Robot):
             goal_deg = [safe[f"{name}.pos"] for name in JOINT_NAMES]
 
         # Convert degrees → radians and send to arm
+        # print(goal_deg)
         self._arm.move_j([math.radians(v) for v in goal_deg])
 
         self.logs["write_pos_dt_s"] = time.perf_counter() - t0
