@@ -180,42 +180,46 @@ class AgxNeroFollower(Robot):
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self.name} is not connected.")
-
+    
         t0 = time.perf_counter()
-
-        # Build goal list in joint order — action is always in degrees
-        goal_deg = [float(action.get(f"{name}.pos", 0.0)) for name in JOINT_NAMES]
-
-        # Clamp to joint limits
-        goal_deg = [
-            max(JOINT_LIMITS_DEG[name][0], min(JOINT_LIMITS_DEG[name][1], v))
-            for name, v in zip(JOINT_NAMES, goal_deg)
-        ]
-        
-        # Force indices 3 and 5 to zero
+    
+        # 1. Extract keys and values directly from the action dict (ignoring JOINT_NAMES)
+        # We assume the order in the dictionary is the correct joint order
+        joint_keys = [k for k in action.keys() if k.endswith(".pos")]
+        goal_deg = [float(action[k]) for k in joint_keys]
+    
+        # 2. Force indices 2 and 5 to zero
         for i in [2, 5]:
             if i < len(goal_deg):
                 goal_deg[i] = 0.0
-                
-        goal_deg[4], goal_deg[6] = goal_deg[6], goal_deg[4]
-
-        # Apply max_relative_target safety cap if configured
+    
+        # 3. Swap indices 4 and 6
+        if len(goal_deg) > 6:
+            goal_deg[4], goal_deg[6] = goal_deg[6], goal_deg[4]
+    
+        # 4. Apply max_relative_target safety cap if configured
         if self.config.max_relative_target is not None:
+            # Read current angles to compare
             present_deg = [math.degrees(v) for v in self._read_joint_angles_rad()]
+            
+            # Create the mapping for the safety checker: { 'joint.pos': (goal, present) }
             goal_present = {
-                f"{name}.pos": (goal_deg[i], present_deg[i]) for i, name in enumerate(JOINT_NAMES)
+                k: (goal_deg[i], present_deg[i] if i < len(present_deg) else goal_deg[i]) 
+                for i, k in enumerate(joint_keys)
             }
+            
             safe = ensure_safe_goal_position(goal_present, self.config.max_relative_target)
-            goal_deg = [safe[f"{name}.pos"] for name in JOINT_NAMES]
-
-        # Convert degrees → radians and send to arm
+            # Update goal_deg with safe values
+            goal_deg = [safe[k] for k in joint_keys]
+    
+        # 5. Convert degrees → radians and send to arm
         # print(goal_deg)
         self._arm.move_j([math.radians(v) for v in goal_deg])
-
+    
         self.logs["write_pos_dt_s"] = time.perf_counter() - t0
-
-        # Return the action actually sent, always in degrees
-        return {f"{name}.pos": goal_deg[i] for i, name in enumerate(JOINT_NAMES)}
+    
+        # 6. Return the action actually sent
+        return {k: goal_deg[i] for i, k in enumerate(joint_keys)}
 
     # ------------------------------------------------------------------
     # Helpers
