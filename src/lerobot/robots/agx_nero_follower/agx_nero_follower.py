@@ -193,9 +193,7 @@ class AgxNeroFollower(Robot):
             if i < len(goal_deg):
                 goal_deg[i] = 0.0
     
-        # 3. Swap indices 4 and 6
-        if len(goal_deg) > 6:
-            goal_deg[4], goal_deg[6] = goal_deg[6], goal_deg[4]
+        goal_deg[4], goal_deg[6] = goal_deg[6], goal_deg[4]
     
         # 4. Apply max_relative_target safety cap if configured
         if self.config.max_relative_target is not None:
