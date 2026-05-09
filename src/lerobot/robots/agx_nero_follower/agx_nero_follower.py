@@ -106,11 +106,14 @@ class AgxNeroFollower(Robot):
             bitrate=self.config.bitrate,
         )
         self._arm = AgxArmFactory.create_arm(arm_cfg)
+        self.gripper = self._arm.init_effector(self._arm.OPTIONS.EFFECTOR.AGX_GRIPPER)
         self._arm.connect()
+        self._arm.set_normal_mode()
+        self.gripper.move_gripper_deg(value=0.0, force=3.0)
 
         # Enable all joints (retry until confirmed)
         for _ in range(50):
-            if self._arm.enable(255):
+            if self._arm.enable():
                 break
             time.sleep(0.02)
         else:
@@ -129,6 +132,14 @@ class AgxNeroFollower(Robot):
         self._arm.set_speed_percent(self.config.speed_percent)
         self._arm.set_joint_limits_enabled(True)
         self._arm.set_auto_set_motion_mode_enabled(True)
+        
+        if hasattr(self, "gripper") and self.gripper is not None:
+            self.gripper.set_gripper_teaching_pendant_param(
+                teaching_range_per=200,
+                max_range_config=0.1,
+                teaching_friction=10,
+            )
+            print("AGX gripper connected")
 
     def calibrate(self) -> None:
         # Nero arm has factory-calibrated absolute encoders; nothing to do here.
@@ -145,8 +156,8 @@ class AgxNeroFollower(Robot):
                 pass
 
         if self._arm is not None:
-            if self.config.disable_on_disconnect:
-                self._arm.disable(255)
+            # if self.config.disable_on_disconnect:
+            #     self._arm.disable(255)
             self._arm.disconnect()
             self._arm = None
 
@@ -187,12 +198,14 @@ class AgxNeroFollower(Robot):
         # We assume the order in the dictionary is the correct joint order
         joint_keys = [k for k in action.keys() if k.endswith(".pos")]
         goal_deg = [float(action[k]) for k in joint_keys]
-    
+        
+        goal_deg[2] = -goal_deg[2] + 90
+        gripper = min(goal_deg[5] * 2, 95)
+        goal_deg.pop(5)
         # 2. Force indices 2 and 5 to zero
-        for i in [2, 5]:
-            if i < len(goal_deg):
-                goal_deg[i] = 0.0
-    
+        goal_deg.insert(2, 0.0)
+        goal_deg.insert(5, 0.0)
+        goal_deg[1] = goal_deg[1] + 43.7466
         goal_deg[4], goal_deg[6] = goal_deg[6], goal_deg[4]
     
         # 4. Apply max_relative_target safety cap if configured
@@ -212,8 +225,10 @@ class AgxNeroFollower(Robot):
     
         # 5. Convert degrees → radians and send to arm
         # print(goal_deg)
+        self.gripper.move_gripper_deg(value=gripper)
         self._arm.move_j([math.radians(v) for v in goal_deg])
-    
+        
+        
         self.logs["write_pos_dt_s"] = time.perf_counter() - t0
     
         # 6. Return the action actually sent

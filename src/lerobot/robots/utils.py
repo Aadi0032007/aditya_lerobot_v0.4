@@ -76,6 +76,10 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .widowx_follower.widowx_follower import WidowXFollower
 
         return WidowXFollower(config)
+    elif config.type == "agx_nero_follower":
+        from .agx_nero_follower.agx_nero_follower import AgxNeroFollower
+
+        return AgxNeroFollower(config)
     else:
         try:
             return cast(Robot, make_device_from_device_class(config))
