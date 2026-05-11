@@ -170,18 +170,35 @@ class AgxNeroFollower(Robot):
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self.name} is not connected.")
-
+    
         obs: dict[str, Any] = {}
-
+    
+        # Define explicit mapping to handle specific indices and skip 2 & 5
+        JOINT_MAPPING = {
+            0: "shoulder_pan",
+            1: "shoulder_lift",
+            3: "elbow_flex",
+            4: "wrist_roll",
+            6: "wrist_flex",
+        }
+    
         t0 = time.perf_counter()
         joint_angles_rad = self._read_joint_angles_rad()
-        for i, name in enumerate(JOINT_NAMES):
-            obs[f"{name}.pos"] = math.degrees(joint_angles_rad[i])
+    
+        # Iterate through our mapping to populate the observation dict
+        for idx, name in JOINT_MAPPING.items():
+            # Ensure the index exists in the returned sensor data
+            if idx < len(joint_angles_rad):
+                obs[f"{name}.pos"] = math.degrees(joint_angles_rad[idx])
+        
+        obs["gripper.pos"] = float(gs.msg.value) if (gs := self.gripper.get_gripper_status()) is not None else 0.0
+        print(obs)                
         self.logs["read_pos_dt_s"] = time.perf_counter() - t0
-
+    
+        # Camera processing remains the same
         for cam_key, cam in self.cameras.items():
             obs[cam_key] = cam.async_read()
-
+    
         return obs
 
     # ------------------------------------------------------------------
