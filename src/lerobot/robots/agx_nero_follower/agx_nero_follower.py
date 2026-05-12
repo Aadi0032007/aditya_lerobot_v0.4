@@ -58,7 +58,7 @@ class AgxNeroFollower(Robot):
 
     @property
     def _motors_ft(self) -> dict[str, type]:
-        return {f"{name}.pos": float for name in JOINT_NAMES}
+        return {f"{name}.pos": float for name in ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_roll", "wrist_flex", "gripper"]}
 
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
@@ -192,7 +192,6 @@ class AgxNeroFollower(Robot):
                 obs[f"{name}.pos"] = math.degrees(joint_angles_rad[idx])
         
         obs["gripper.pos"] = float(gs.msg.value) if (gs := self.gripper.get_gripper_status()) is not None else 0.0
-        print(obs)                
         self.logs["read_pos_dt_s"] = time.perf_counter() - t0
     
         # Camera processing remains the same
