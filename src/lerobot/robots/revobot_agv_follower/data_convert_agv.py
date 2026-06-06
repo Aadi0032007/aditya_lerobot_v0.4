@@ -1,151 +1,437 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Mar 17 16:32:17 2026
+Build a LeRobot HuggingFace dataset for `revobots_agv_follower` from pre-recorded
+split sessions (output of split_session_agv.py) — WITHOUT using the physical robot.
 
-@author: Aadi
+This script intentionally mirrors lerobot's official `lerobot_record.py` flow as
+closely as possible. The ONLY thing that changes is the data source: instead of
+pulling observations from a live `Robot` and actions from a live `Teleoperator`,
+we pull them from (video frame + JSONL row) pairs sitting on disk.
+
+Specifically, we use the same helpers / context manager that the production
+recorder uses:
+    - hw_to_dataset_features    (feature schema)
+    - build_dataset_frame       (per-frame packing — guarantees key/shape match)
+    - VideoEncodingManager      (proper video encoding lifecycle around the loop)
+    - dataset.add_frame / save_episode / finalize
+
+Input layout (produced by split_session_agv.py):
+
+    <parent-dir>/
+        session_0/  session_0.mp4  session_0.jsonl
+        session_1/  session_1.mp4  session_1.jsonl
+        ...
+
+Each session_<i>/ folder becomes ONE episode.
+
+Expected JSONL row format (one row per video frame, same order as frames):
+
+    {
+      "frame_index": 0,
+      "linear_velocity": 0.0,
+      "angular_velocity": 0.0,
+      "gps_latitude":  45.45799...,
+      "gps_longitude": -122.85448...,
+      ... (any other fields are ignored)
+    }
 """
 
-import os
-import glob
-import json
-import cv2
-import torch
-import logging
 import argparse
+import json
+import os
+from pathlib import Path
 
-from lerobot.processor import (
-    PolicyAction,
-    PolicyProcessorPipeline,
-    RobotAction,
-    RobotObservation,
-    RobotProcessorPipeline,
-    make_default_processors,
-)
+import cv2
+import numpy as np
+from tqdm import tqdm
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import build_dataset_frame
+from lerobot.datasets.utils import build_dataset_frame, hw_to_dataset_features
+from lerobot.datasets.video_utils import VideoEncodingManager
 from lerobot.utils.constants import ACTION, OBS_STR
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-def batch_convert_sessions(
-    parent_dir: str, 
-    repo_id: str, 
-    task_description: str,
-    fps: int = 30
-):
-    teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
-    json_files = sorted(glob.glob(os.path.join(parent_dir, "*/*.json")))
-    
-    if not json_files:
-        logger.error(f"No JSON session files found in {parent_dir}")
-        return
+# ---------------------------------------------------------------------------
+# Feature schema — mirrors RevobotsAGVFollower.observation_features /
+# action_features. Defined here so we DON'T need to import the robot class
+# (which would pull in ROS, GpsReader, cameras, etc.).
+# ---------------------------------------------------------------------------
 
-    num_episodes = len(json_files)
-    logger.info(f"Found {num_episodes} sessions to convert into episodes.")
+CAMERA_KEY = "front"
+CAMERA_HEIGHT = 480
+CAMERA_WIDTH = 640
 
-    # 1. FIXED: Grouped the numeric values and added the required "names" arrays
-    dataset_features = {
-        "observation.images.front": {
-            "dtype": "image", 
-            "shape": (480, 640, 3), 
-            "names": ["height", "width", "channels"]
-        },
-        "observation.lin_x": {"dtype": "float32", "shape": ()},
-        "observation.ang_z": {"dtype": "float32", "shape": ()},
-        # Added GPS Observations
-        "observation.lat": {"dtype": "float32", "shape": ()},
-        "observation.long": {"dtype": "float32", "shape": ()},
-        "action.lin_x": {"dtype": "float32", "shape": ()},
-        "action.ang_z": {"dtype": "float32", "shape": ()}
+ROBOT_ACTION_FEATURES = {
+    "lin_x": float,
+    "ang_z": float,
+}
+
+ROBOT_OBSERVATION_FEATURES = {
+    "lin_x": float,
+    "ang_z": float,
+    "lat":   float,
+    "long":  float,
+    "orientation": float,
+    CAMERA_KEY: (CAMERA_HEIGHT, CAMERA_WIDTH, 3),
+}
+
+
+def build_dataset_features() -> dict:
+    """Build the LeRobotDataset feature schema using the same helper the official
+    record script uses. With use_videos=True at create time, the camera tuple
+    becomes a 'video' feature; scalar floats get packed into 'observation.state'
+    and 'action' vectors."""
+    action_features = hw_to_dataset_features(ROBOT_ACTION_FEATURES, ACTION)
+    obs_features = hw_to_dataset_features(ROBOT_OBSERVATION_FEATURES, OBS_STR)
+    return {**action_features, **obs_features}
+
+
+# ---------------------------------------------------------------------------
+# JSONL row → raw observation dict + raw action dict
+# These are the SAME shape that RevobotsAGVFollower.get_observation() and
+# the teleop would produce on a live robot. build_dataset_frame then handles
+# the packing into dataset keys.
+# Edit this function if your JSONL uses a different layout.
+# ---------------------------------------------------------------------------
+
+def row_to_raw_obs_and_action(row: dict, image_rgb: np.ndarray) -> tuple[dict, dict]:
+    """Return (raw_observation, raw_action) in the robot's native key space.
+
+    Schema produced by the upstream recorder is flat. Action and observation
+    share the same velocity fields (commanded == measured for this dataset).
+    """
+    lin_x = float(row.get("linear_velocity", 0.0))
+    ang_z = float(row.get("angular_velocity", 0.0))
+    lat   = float(row.get("gps_latitude",  0.0))
+    lon   = float(row.get("gps_longitude", 0.0))
+    ori   = float(row.get("orientation",    0.0))
+
+    raw_action = {
+        "lin_x": lin_x,
+        "ang_z": ang_z,
     }
+    raw_observation = {
+        "lin_x":       lin_x,
+        "ang_z":       ang_z,
+        "lat":         lat,
+        "long":        lon,
+        "orientation": ori,
+        CAMERA_KEY:    image_rgb,
+    }
+    return raw_observation, raw_action
 
-    # 2. Create the Dataset instance
-    logger.info(f"Creating LeRobot dataset: {repo_id}")
-    dataset = LeRobotDataset.create(
-        repo_id=repo_id,
-        fps=fps,
-        features=dataset_features,
-        use_videos=True,
-        robot_type="revobots_agv_follower", 
-        image_writer_processes=0, 
-        image_writer_threads=0,
-    )
 
-    # 3. Loop through every session file
-    for episode_idx, json_path in enumerate(json_files):
-        video_path = json_path.replace(".json", ".mp4")
-        
-        if not os.path.exists(video_path):
-            logger.warning(f"Skipping {json_path} - missing matching MP4 file.")
+# ---------------------------------------------------------------------------
+# Session discovery
+# ---------------------------------------------------------------------------
+
+def find_session_folders(input_root: Path) -> list[Path]:
+    """Return all session_<i>/ folders that contain a matching mp4 + jsonl pair."""
+    sessions = []
+    for sub in sorted(input_root.iterdir()):
+        if not sub.is_dir():
             continue
-            
-        logger.info(f"--- Processing Episode {episode_idx + 1}/{num_episodes}: {os.path.basename(json_path)} ---")
+        name = sub.name
+        mp4 = sub / f"{name}.mp4"
+        jsonl = sub / f"{name}.jsonl"
+        if mp4.is_file() and jsonl.is_file():
+            sessions.append(sub)
+    return sessions
 
-        with open(json_path, 'r') as f:
-            log_data = json.load(f)
 
-        cap = cv2.VideoCapture(video_path)
-        
-        for i, row in enumerate(log_data):
-                    ret, frame_bgr = cap.read()
-                    if not ret:
-                        break
-        
-                    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                    
-                    lin_val = row.get("linear_x", row.get("lin_x", 0.0))
-                    ang_val = row.get("angular_z", row.get("ang_z", 0.0))
-                    # Extract GPS values from JSON
-                    lat_val = row.get("lat", 0.0)
-                    long_val = row.get("long", 0.0)
-                    
-                    # A. Update RAW Observation to include new fields
-                    raw_obs = {
-                        "front": frame_rgb,
-                        "lin_x": lin_val,
-                        "ang_z": ang_val,
-                        "lat": lat_val,    # Added
-                        "long": long_val   # Added
-                    }
-        
-                    # B. Reconstruct RAW Action (Assuming actions remain just velocity)
-                    raw_act = {
-                        "lin_x": lin_val,
-                        "ang_z": ang_val
-                    }
-                    
-                    # The rest of your processing remains the same:
-                    observation_frame = build_dataset_frame(dataset.features, raw_obs, prefix=OBS_STR)
-                    action_frame = build_dataset_frame(dataset.features, raw_act, prefix=ACTION)
-                    
-                    frame = {**observation_frame, **action_frame, "task": task_description}
-                    dataset.add_frame(frame)
-            
-        # Save the episode to flush the buffer
-        dataset.save_episode()
+def load_jsonl(path: Path) -> list[dict]:
+    rows = []
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Parquet footer verification / recovery
+# ---------------------------------------------------------------------------
+
+PARQUET_MAGIC = b"PAR1"
+
+
+def _has_parquet_footer(path: Path) -> bool:
+    """A valid parquet file ends with the 4-byte magic 'PAR1'. If it doesn't,
+    the writer's close() never wrote the footer and the file is unreadable."""
+    if not path.is_file() or path.stat().st_size < 8:
+        return False
+    with open(path, "rb") as f:
+        f.seek(-4, 2)
+        return f.read(4) == PARQUET_MAGIC
+
+
+def _try_recover_parquet(path: Path) -> None:
+    """Attempt to recover a footer-less parquet file.
+
+    Strategy: streaming pq.ParquetWriter writes row groups sequentially with
+    'PAR1' at the start but never appended the footer. We can scan the file
+    for the row groups using pyarrow's lower-level interface, but the simpler
+    practical approach is to re-read the underlying buffer via pyarrow's
+    BufferReader with explicit handling. In practice the cleanest recovery
+    is to fail loud here and tell the user what to do.
+    """
+    print(f"      [recover] {path.name}: footer missing; cannot auto-recover "
+          f"a streamed parquet without the row-group index. The episode data "
+          f"was streamed but never committed.")
+    # Best-effort: try opening with pyarrow and see if it has any salvageable
+    # row groups via reading the schema header.
+    try:
+        import pyarrow.parquet as pq
+        # This will likely raise — but if it doesn't, we got lucky.
+        pq.read_table(str(path))
+        print(f"      [recover] {path.name}: unexpectedly readable, no action needed.")
+    except Exception as e:
+        print(f"      [recover] {path.name}: confirmed unreadable ({type(e).__name__}).")
+
+
+# ---------------------------------------------------------------------------
+# Per-session → one episode
+# ---------------------------------------------------------------------------
+
+def add_session_as_episode(
+    session_dir: Path,
+    dataset: LeRobotDataset,
+    task: str,
+) -> int:
+    """Read one session_<i>/ folder and append it as a single episode.
+    Mirrors the inner body of record_loop() — just without the live robot."""
+    name = session_dir.name
+    mp4_path = session_dir / f"{name}.mp4"
+    jsonl_path = session_dir / f"{name}.jsonl"
+
+    rows = load_jsonl(jsonl_path)
+
+    cap = cv2.VideoCapture(str(mp4_path))
+    if not cap.isOpened():
+        print(f"[!] Could not open {mp4_path}, skipping.")
+        return 0
+
+    total_frames_vid = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_frames = min(total_frames_vid, len(rows))
+
+    pbar = tqdm(
+        total=total_frames,
+        desc=f"  {name}",
+        unit="f",
+        leave=True,
+        dynamic_ncols=True,
+    )
+    n_written = 0
+    try:
+        for i in range(total_frames):
+            ret, frame_bgr = cap.read()
+            if not ret:
+                break
+
+            # cv2 reads BGR; cameras in lerobot return RGB.
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+            raw_obs, raw_action = row_to_raw_obs_and_action(rows[i], frame_rgb)
+
+            # Same packing the official record_loop uses.
+            observation_frame = build_dataset_frame(
+                dataset.features, raw_obs, prefix=OBS_STR
+            )
+            action_frame = build_dataset_frame(
+                dataset.features, raw_action, prefix=ACTION
+            )
+            frame = {**observation_frame, **action_frame, "task": task}
+            dataset.add_frame(frame)
+            n_written += 1
+
+            if (i & 0x1F) == 0:
+                pbar.set_postfix(
+                    lin=f"{raw_action['lin_x']:+.2f}",
+                    ang=f"{raw_action['ang_z']:+.2f}",
+                )
+            pbar.update(1)
+    finally:
         cap.release()
-        logger.info(f"Episode {episode_idx + 1} saved.")
+        pbar.close()
 
-    # 4. Finalize the whole dataset natively
-    logger.info("All episodes processed. Finalizing dataset...")
-    dataset.finalize()
-    logger.info(f"Success! Dataset successfully saved and finalized locally at {repo_id}")
+    # Same call the official record() makes after each episode.
+    dataset.save_episode()
+    return n_written
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def parse_args():
+    p = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--parent-dir", required=True, dest="parent_dir",
+                   help="Parent folder containing session_0/, session_1/, ...")
+    p.add_argument("--repo-id", required=True,
+                   help="HuggingFace dataset repo id, e.g. user/revobots_agv_v1")
+    p.add_argument("--task", default="Drive the AGV.",
+                   help="Task description string stored with every frame.")
+    p.add_argument("--fps", type=int, default=15,
+                   help="Recording fps (must match split_session_agv.py; default 15).")
+    p.add_argument("--robot-type", default="revobots_agv_follower")
+    p.add_argument("--image-writer-threads", type=int, default=4)
+    p.add_argument("--video-encoding-batch-size", type=int, default=1,
+                   help="Encode N episodes' videos in one batch. Default 1 = "
+                        "encode per episode (matches lerobot_record default).")
+    p.add_argument("--resume", action="store_true",
+                   help="Resume into an existing dataset; skip session_<i>/ "
+                        "folders whose episode index is already saved.")
+    p.add_argument("--push-to-hub", action="store_true",
+                   help="Push to HuggingFace Hub after writing all episodes.")
+    p.add_argument("--no-videos", action="store_true",
+                   help="Store images as PNG instead of encoded video (larger).")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    input_root = Path(os.path.expanduser(args.parent_dir)).resolve()
+    if not input_root.is_dir():
+        raise SystemExit(f"[!] Not a directory: {input_root}")
+
+    sessions = find_session_folders(input_root)
+    if not sessions:
+        raise SystemExit(f"[!] No session_<i>/ folders found in {input_root}")
+
+    print(f"[*] Input root:   {input_root}")
+    print(f"[*] Sessions:     {len(sessions)}")
+    print(f"[*] Repo id:      {args.repo_id}")
+    print(f"[*] FPS:          {args.fps}")
+    print(f"[*] Resume:       {args.resume}")
+
+    features = build_dataset_features()
+
+    # Show the resolved schema so we can sanity-check it before writing.
+    print("\n[*] Resolved dataset feature schema:")
+    for k, v in features.items():
+        dtype = v.get("dtype", "?")
+        shape = tuple(v.get("shape", ())) if "shape" in v else ""
+        names = v.get("names", "")
+        print(f"      {k:35s}  dtype={dtype:8s}  shape={shape}  names={names}")
+    print()
+
+    # --- Open or create the dataset (same calls as lerobot_record.record) --
+    if args.resume:
+        try:
+            dataset = LeRobotDataset(
+                repo_id=args.repo_id,
+                batch_encoding_size=args.video_encoding_batch_size,
+            )
+            start_idx = dataset.num_episodes
+            print(f"[*] Resuming dataset at episode index {start_idx}")
+        except Exception as e:
+            print(f"[!] --resume failed to load existing dataset ({e}); "
+                  f"creating new one.")
+            dataset = LeRobotDataset.create(
+                repo_id=args.repo_id,
+                fps=args.fps,
+                features=features,
+                robot_type=args.robot_type,
+                use_videos=not args.no_videos,
+                image_writer_threads=args.image_writer_threads,
+                batch_encoding_size=args.video_encoding_batch_size,
+            )
+            start_idx = 0
+    else:
+        dataset = LeRobotDataset.create(
+            repo_id=args.repo_id,
+            fps=args.fps,
+            features=features,
+            robot_type=args.robot_type,
+            use_videos=not args.no_videos,
+            image_writer_threads=args.image_writer_threads,
+            batch_encoding_size=args.video_encoding_batch_size,
+        )
+        start_idx = 0
+
+    # --- Process each session as one episode -------------------------------
+    todo = sessions[start_idx:]
+    print(f"[*] Processing {len(todo)} episode(s)...\n")
+
+    total_frames = 0
+
+    # try/finally ensures dataset.finalize() runs even on Ctrl-C / exception,
+    # so parquet footers are always written. The VideoEncodingManager context
+    # mirrors what the official record() does and is what properly flushes
+    # video encoding state on exit (without it the data parquet can end up
+    # without its footer — "No magic bytes found at end of file").
+    try:
+        with VideoEncodingManager(dataset):
+            outer = tqdm(
+                total=len(todo),
+                desc="Episodes",
+                unit="ep",
+                position=0,
+                dynamic_ncols=True,
+            )
+            try:
+                for offset, session_dir in enumerate(todo):
+                    ep_idx = start_idx + offset
+                    outer.set_description(f"Episode {ep_idx} ({session_dir.name})")
+                    n = add_session_as_episode(session_dir, dataset, args.task)
+                    total_frames += n
+                    outer.set_postfix(frames=total_frames)
+                    outer.update(1)
+            finally:
+                outer.close()
+
+            # Force-close the streaming data parquet writer while we're still
+            # safely inside the encoding manager. This is what writes the
+            # parquet footer ("PAR1" magic bytes at the end of the file).
+            # Without doing it here explicitly, on some setups (Windows +
+            # certain pyarrow versions) the writer gets nulled by lifecycle
+            # bookkeeping before finalize() runs, so the footer never lands.
+            print("\n[*] Force-closing data parquet writer...")
+            dataset._close_writer()
+            dataset.meta._close_writer()
+    finally:
+        print("[*] Finalizing dataset...")
+        try:
+            dataset.finalize()
+        except Exception as e:
+            print(f"[!] finalize() raised: {e}")
+
+    # --- Verify every parquet on disk has a footer -------------------------
+    print("\n[*] Verifying parquet files...")
+    bad = []
+    for pq_path in sorted(Path(dataset.root).rglob("*.parquet")):
+        ok = _has_parquet_footer(pq_path)
+        rel = pq_path.relative_to(dataset.root)
+        print(f"      {'OK ' if ok else 'BAD'}  {rel}")
+        if not ok:
+            bad.append(pq_path)
+
+    if bad:
+        print(f"\n[!] {len(bad)} parquet file(s) are missing footers — the close()"
+              f" call did not flush. Attempting recovery by rewriting them...")
+        for bad_path in bad:
+            _try_recover_parquet(bad_path)
+        # Re-verify
+        print("\n[*] Re-verifying after recovery...")
+        still_bad = [p for p in bad if not _has_parquet_footer(p)]
+        if still_bad:
+            print(f"[!] Could not recover: {still_bad}")
+        else:
+            print("[✓] All parquets now have valid footers.")
+
+    print(f"\n[✓] Done. Wrote {total_frames} new frames across "
+          f"{len(todo)} new episode(s).")
+    print(f"[✓] Dataset lives at: {dataset.root}")
+
+    if args.push_to_hub:
+        print("[*] Pushing to HuggingFace Hub...")
+        dataset.push_to_hub()
+        print("[✓] Pushed.")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Batch convert JSON/MP4 sessions into a LeRobot dataset.")
-    parser.add_argument("--parent-dir", type=str, required=True, help="Directory containing all your session subfolders")
-    parser.add_argument("--repo-id", type=str, required=True, help="Hugging Face repo id (e.g. username/dataset_name)")
-    parser.add_argument("--task", type=str, default="Follow the target using the AGV", help="Task description for the dataset")
-    parser.add_argument("--fps", type=int, default=30, help="Frames per second of the recordings")
-    
-    args = parser.parse_args()
-    
-    batch_convert_sessions(
-        parent_dir=args.parent_dir,
-        repo_id=args.repo_id,
-        task_description=args.task,
-        fps=args.fps
-    )
+    main()

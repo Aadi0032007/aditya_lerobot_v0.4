@@ -1,10 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Mar 24 12:06:55 2026
+Created on Sat Jun  6 16:55:11 2026
 
 @author: Aadi
 """
+"""
+Split scout/lab sessions into 5-minute chunks.
 
+Output:
+  ~/.cache/scout/lab/split_session/split_session_<datetime>/
+      ├── session_0/
+      │   ├── session_0.mp4
+      │   └── session_0.jsonl
+      ├── session_1/...
+"""
 import cv2
 import os
 import json
@@ -12,100 +21,89 @@ import argparse
 from datetime import datetime
 from tqdm import tqdm
 
-# from lerobot.cameras.image_detection_tracking.yolo_utils import process_frame
 
 def get_args():
-    parser = argparse.ArgumentParser(description="Split MP4 and JSON into 5-minute sessions.")
-    parser.add_argument("input_dir", help="Path to the folder containing the .mp4 and .json file")
+    parser = argparse.ArgumentParser(description="Split scout/lab sessions into 5-minute chunks.")
+    parser.add_argument("input_path", help="Path to a single session folder OR a parent folder containing multiple sessions")
     return parser.parse_args()
 
-def find_files(input_dir):
-    video_file = None
-    json_file = None
-    
-    for f in os.listdir(input_dir):
-        if f.endswith(".mp4"):
-            video_file = os.path.join(input_dir, f)
-        elif f.endswith(".json"):
-            json_file = os.path.join(input_dir, f)
-            
-    if not video_file or not json_file:
-        raise FileNotFoundError(f"Could not find both an .mp4 and a .json file in {input_dir}")
-        
-    return video_file, json_file
 
-def split_session():
-    args = get_args()
-    input_dir = args.input_dir
+def is_session_folder(path):
+    return (os.path.isfile(os.path.join(path, "video.mp4"))
+            and os.path.isfile(os.path.join(path, "data.jsonl")))
 
-    try:
-        video_path, json_path = find_files(input_dir)
-    except Exception as e:
-        print(f"[!] Error: {e}")
-        return
 
-    # --- Setup Output Directory ---
-    # Using March 24, 2026 as the current reference point
-    timestamp = datetime.now().strftime("%d%m%Y%H%M")
-    base_cache_dir = os.path.expanduser("~/.cache/aadi_sessions")
-    output_folder_name = f"aadi_session_{timestamp}"
-    output_root = os.path.join(base_cache_dir, output_folder_name)
-    
-    os.makedirs(output_root, exist_ok=True)
-    print(f"[*] Input Folder: {input_dir}")
-    print(f"[*] Output Root:  {output_root}")
+def find_sessions(input_path):
+    if is_session_folder(input_path):
+        return [(os.path.basename(os.path.normpath(input_path)), input_path)]
 
-    # --- Configuration ---
-    FPS = 30
-    SEGMENT_MINUTES = 5
-    FRAMES_PER_SEGMENT = SEGMENT_MINUTES * 60 * FPS # 9000 frames
+    sessions = []
+    for name in sorted(os.listdir(input_path)):
+        sub = os.path.join(input_path, name)
+        if os.path.isdir(sub) and is_session_folder(sub):
+            sessions.append((name, sub))
+    return sessions
 
-    # --- Load Data ---
-    print(f"[*] Loading JSON data...")
-    with open(json_path, 'r') as f:
-        json_data = json.load(f)
-    
+
+def load_jsonl(path):
+    rows = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def split_one_session(session_name, session_path, output_root, start_session_idx, fps=15, segment_minutes=5):
+    """Returns the next session_idx to use (so multi-session runs keep numbering continuous)."""
+    video_path = os.path.join(session_path, "video.mp4")
+    jsonl_path = os.path.join(session_path, "data.jsonl")
+
+    frames_per_segment = segment_minutes * 60 * fps  # 4500
+
+    print(f"\n[*] === Splitting input: {session_name} ===")
+    json_data = load_jsonl(jsonl_path)
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"[!] Error: Could not open video {video_path}")
-        return
+        print(f"[!] Could not open video {video_path}, skipping.")
+        return start_session_idx
 
-    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames_vid = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     total_frames_json = len(json_data)
     total_frames = min(total_frames_json, total_frames_vid)
 
-    # Use 'mp4v' for high compatibility
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    print(f"[*] Frames — video: {total_frames_vid}, json: {total_frames_json}, using: {total_frames}")
 
-    # --- Processing ---
-    pbar = tqdm(total=total_frames, desc="Processing Sessions", unit="frame")
-    
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    pbar = tqdm(total=total_frames, desc=f"{session_name}", unit="frame")
+
     current_frame_idx = 0
-    session_idx = 0
+    session_idx = start_session_idx
 
     while current_frame_idx < total_frames:
-        session_name = f"session_{session_idx}"
-        session_dir = os.path.join(output_root, session_name)
-        os.makedirs(session_dir, exist_ok=True)
-        
-        # Paths using the specific session name for the files
-        seg_video_path = os.path.join(session_dir, f"{session_name}.mp4")
-        seg_json_path = os.path.join(session_dir, f"{session_name}.json")
-        
-        # Prepare Writer
-        out = cv2.VideoWriter(seg_video_path, fourcc, FPS, (width, height))
-        
-        # Slice JSON
-        start_idx = current_frame_idx
-        end_idx = min(current_frame_idx + FRAMES_PER_SEGMENT, total_frames)
-        
-        json_slice = json_data[start_idx:end_idx]
-        with open(seg_json_path, 'w') as f:
-            json.dump(json_slice, f, indent=4)
+        seg_name = f"session_{session_idx}"
+        seg_dir = os.path.join(output_root, seg_name)
+        os.makedirs(seg_dir, exist_ok=True)
 
-        # Write Video Frames
+        seg_video_path = os.path.join(seg_dir, f"{seg_name}.mp4")
+        seg_jsonl_path = os.path.join(seg_dir, f"{seg_name}.jsonl")
+
+        out = cv2.VideoWriter(seg_video_path, fourcc, fps, (width, height))
+
+        start_idx = current_frame_idx
+        end_idx = min(current_frame_idx + frames_per_segment, total_frames)
+
+        # Save JSONL (one object per line)
+        json_slice = json_data[start_idx:end_idx]
+        with open(seg_jsonl_path, 'w') as f:
+            for row in json_slice:
+                f.write(json.dumps(row) + "\n")
+
+        # Write video frames
         for _ in range(start_idx, end_idx):
             ret, frame = cap.read()
             if not ret:
@@ -113,15 +111,45 @@ def split_session():
             out.write(frame)
             current_frame_idx += 1
             pbar.update(1)
-        
+
         out.release()
         session_idx += 1
 
     cap.release()
     pbar.close()
-    
-    print(f"\n[+] Success! Processed {total_frames} frames.")
-    print(f"[+] Final output directory: {output_root}")
+    return session_idx
+
+
+def main():
+    args = get_args()
+    input_path = os.path.expanduser(args.input_path)
+
+    if not os.path.isdir(input_path):
+        print(f"[!] Not a directory: {input_path}")
+        return
+
+    sessions = find_sessions(input_path)
+    if not sessions:
+        print(f"[!] No valid sessions (with video.mp4 + data.jsonl) found in {input_path}")
+        return
+
+    timestamp = datetime.now().strftime("%d%m%Y%H%M")
+    output_root = os.path.expanduser(
+        f"~/.cache/scout/lab/split_session/split_session_{timestamp}"
+    )
+    os.makedirs(output_root, exist_ok=True)
+
+    print(f"[*] Input:        {input_path}")
+    print(f"[*] Output root:  {output_root}")
+    print(f"[*] Sessions found: {len(sessions)}")
+
+    next_idx = 0
+    for session_name, session_path in sessions:
+        next_idx = split_one_session(session_name, session_path, output_root, next_idx)
+
+    print(f"\n[+] All done. {next_idx} total segments written.")
+    print(f"[+] Output: {output_root}")
+
 
 if __name__ == "__main__":
-    split_session()
+    main()

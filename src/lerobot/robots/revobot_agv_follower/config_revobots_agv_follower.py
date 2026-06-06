@@ -17,3 +17,5 @@ class RevobotsAGVFollowerConfig(RobotConfig):
         
     # Shared cameras
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+    gps_udp_host: str   = "127.0.0.1"
+    gps_udp_port: int   = 57002
