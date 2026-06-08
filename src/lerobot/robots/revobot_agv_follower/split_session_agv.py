@@ -55,7 +55,7 @@ def load_jsonl(path):
     return rows
 
 
-def split_one_session(session_name, session_path, output_root, start_session_idx, fps=15, segment_minutes=5):
+def split_one_session(session_name, session_path, output_root, start_session_idx, fps=15, segment_minutes=2):
     """Returns the next session_idx to use (so multi-session runs keep numbering continuous)."""
     video_path = os.path.join(session_path, "video.mp4")
     jsonl_path = os.path.join(session_path, "data.jsonl")

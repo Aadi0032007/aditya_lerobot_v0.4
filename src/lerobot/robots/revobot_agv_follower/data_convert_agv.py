@@ -11,9 +11,23 @@ we pull them from (video frame + JSONL row) pairs sitting on disk.
 Specifically, we use the same helpers / context manager that the production
 recorder uses:
     - hw_to_dataset_features    (feature schema)
+    - make_default_processors   (observation processor — applied here to keep
+                                 training data symmetric with what inference
+                                 feeds into the policy. See [SYMMETRY] notes.)
     - build_dataset_frame       (per-frame packing — guarantees key/shape match)
     - VideoEncodingManager      (proper video encoding lifecycle around the loop)
     - dataset.add_frame / save_episode / finalize
+
+[SYMMETRY]
+    inference_api.run_inference() calls
+        obs_processed = robot_observation_processor(robot.get_observation())
+        frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
+    before handing the frame to the policy. To avoid a silent train/inference
+    distribution gap if the default processor ever stops being identity (key
+    rename, dtype coercion, etc.), we apply the same processor here. The
+    action processor in inference is policy-output → robot-input, which has
+    no analog in the dataset, so actions stay raw — matching what
+    lerobot_record.py does in the live recording path.
 
 Input layout (produced by split_session_agv.py):
 
@@ -48,6 +62,7 @@ from tqdm import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import build_dataset_frame, hw_to_dataset_features
 from lerobot.datasets.video_utils import VideoEncodingManager
+from lerobot.processor import make_default_processors          # [SYMMETRY] new import
 from lerobot.utils.constants import ACTION, OBS_STR
 
 
@@ -179,11 +194,8 @@ def _try_recover_parquet(path: Path) -> None:
     print(f"      [recover] {path.name}: footer missing; cannot auto-recover "
           f"a streamed parquet without the row-group index. The episode data "
           f"was streamed but never committed.")
-    # Best-effort: try opening with pyarrow and see if it has any salvageable
-    # row groups via reading the schema header.
     try:
         import pyarrow.parquet as pq
-        # This will likely raise — but if it doesn't, we got lucky.
         pq.read_table(str(path))
         print(f"      [recover] {path.name}: unexpectedly readable, no action needed.")
     except Exception as e:
@@ -198,9 +210,15 @@ def add_session_as_episode(
     session_dir: Path,
     dataset: LeRobotDataset,
     task: str,
+    robot_observation_processor,                          # [SYMMETRY] new arg
 ) -> int:
     """Read one session_<i>/ folder and append it as a single episode.
-    Mirrors the inner body of record_loop() — just without the live robot."""
+    Mirrors the inner body of record_loop() — just without the live robot.
+
+    [SYMMETRY] raw_obs is run through `robot_observation_processor` exactly
+    the way `inference_api.inference_loop()` does, so the dataset stores the
+    same shape the policy will be queried with at inference time.
+    """
     name = session_dir.name
     mp4_path = session_dir / f"{name}.mp4"
     jsonl_path = session_dir / f"{name}.jsonl"
@@ -234,9 +252,16 @@ def add_session_as_episode(
 
             raw_obs, raw_action = row_to_raw_obs_and_action(rows[i], frame_rgb)
 
+            # [SYMMETRY] Apply the same observation processor that the
+            # inference loop applies before build_dataset_frame. If the
+            # default processor is identity this is a no-op; if it ever
+            # gains logic (key renames, dtype coercion, etc.) the dataset
+            # and inference input stay aligned automatically.
+            obs_processed = robot_observation_processor(raw_obs)
+
             # Same packing the official record_loop uses.
             observation_frame = build_dataset_frame(
-                dataset.features, raw_obs, prefix=OBS_STR
+                dataset.features, obs_processed, prefix=OBS_STR
             )
             action_frame = build_dataset_frame(
                 dataset.features, raw_action, prefix=ACTION
@@ -289,6 +314,10 @@ def parse_args():
                    help="Push to HuggingFace Hub after writing all episodes.")
     p.add_argument("--no-videos", action="store_true",
                    help="Store images as PNG instead of encoded video (larger).")
+    p.add_argument("--no-obs-processor", action="store_true",
+                   help="Skip the observation processor — write raw obs straight "
+                        "to the dataset. Use only if you also patch inference to "
+                        "skip its observation processor. Default OFF (i.e. apply).")
     return p.parse_args()
 
 
@@ -302,13 +331,24 @@ def main():
     if not sessions:
         raise SystemExit(f"[!] No session_<i>/ folders found in {input_root}")
 
-    print(f"[*] Input root:   {input_root}")
-    print(f"[*] Sessions:     {len(sessions)}")
-    print(f"[*] Repo id:      {args.repo_id}")
-    print(f"[*] FPS:          {args.fps}")
-    print(f"[*] Resume:       {args.resume}")
+    print(f"[*] Input root:    {input_root}")
+    print(f"[*] Sessions:      {len(sessions)}")
+    print(f"[*] Repo id:       {args.repo_id}")
+    print(f"[*] FPS:           {args.fps}")
+    print(f"[*] Resume:        {args.resume}")
+    print(f"[*] Obs processor: {'DISABLED' if args.no_obs_processor else 'ENABLED (symmetric with inference)'}")
 
     features = build_dataset_features()
+
+    # ── [SYMMETRY] Build the observation processor exactly the way
+    # `build_policy_pipeline` does. The first return value (the env-side
+    # processor) and the action processor aren't relevant here — only the
+    # observation processor is, because that's what mutates obs *before*
+    # build_dataset_frame on the inference side.
+    _, _, robot_observation_processor = make_default_processors()
+    if args.no_obs_processor:
+        # Identity stand-in so the rest of the loop doesn't branch.
+        robot_observation_processor = lambda obs: obs   # noqa: E731
 
     # Show the resolved schema so we can sanity-check it before writing.
     print("\n[*] Resolved dataset feature schema:")
@@ -359,11 +399,6 @@ def main():
 
     total_frames = 0
 
-    # try/finally ensures dataset.finalize() runs even on Ctrl-C / exception,
-    # so parquet footers are always written. The VideoEncodingManager context
-    # mirrors what the official record() does and is what properly flushes
-    # video encoding state on exit (without it the data parquet can end up
-    # without its footer — "No magic bytes found at end of file").
     try:
         with VideoEncodingManager(dataset):
             outer = tqdm(
@@ -377,19 +412,18 @@ def main():
                 for offset, session_dir in enumerate(todo):
                     ep_idx = start_idx + offset
                     outer.set_description(f"Episode {ep_idx} ({session_dir.name})")
-                    n = add_session_as_episode(session_dir, dataset, args.task)
+                    n = add_session_as_episode(
+                        session_dir,
+                        dataset,
+                        args.task,
+                        robot_observation_processor,           # [SYMMETRY] pass it down
+                    )
                     total_frames += n
                     outer.set_postfix(frames=total_frames)
                     outer.update(1)
             finally:
                 outer.close()
 
-            # Force-close the streaming data parquet writer while we're still
-            # safely inside the encoding manager. This is what writes the
-            # parquet footer ("PAR1" magic bytes at the end of the file).
-            # Without doing it here explicitly, on some setups (Windows +
-            # certain pyarrow versions) the writer gets nulled by lifecycle
-            # bookkeeping before finalize() runs, so the footer never lands.
             print("\n[*] Force-closing data parquet writer...")
             dataset._close_writer()
             dataset.meta._close_writer()
@@ -415,7 +449,6 @@ def main():
               f" call did not flush. Attempting recovery by rewriting them...")
         for bad_path in bad:
             _try_recover_parquet(bad_path)
-        # Re-verify
         print("\n[*] Re-verifying after recovery...")
         still_bad = [p for p in bad if not _has_parquet_footer(p)]
         if still_bad:
