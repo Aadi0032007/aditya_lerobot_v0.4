@@ -38,8 +38,8 @@ _ROBOT_DIR = os.path.join(
 )
 sys.path.insert(0, _ROBOT_DIR)
 
-from split_session_agv_lib import run_split      # noqa: E402
-from data_convert_agv_lib import run_convert     # noqa: E402
+from split_session_agv import run_split      # noqa: E402
+from data_convert_agv import run_convert     # noqa: E402
 
 
 def parse_args():
