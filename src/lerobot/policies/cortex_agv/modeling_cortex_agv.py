@@ -13,23 +13,24 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Action Chunking Transformer Policy
+"""Cortex AGV Policy
 
-As per Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware (https://huggingface.co/papers/2304.13705).
-The majority of changes here involve removing unused code, unifying naming, and adding helpful comments.
+An Action Chunking Transformer (https://huggingface.co/papers/2304.13705) specialised for AGV driving
+data. The backbone is the ACT implementation in `lerobot.policies.act.modeling_act`.
 
 [METHOD 1 PATCH]
-This file has been modified to support action discretization with class-weighted
-cross-entropy, as a fix for L1 mode-collapse on long-tail action distributions
-(e.g. driving data with 90% near-zero steering commands). See comments tagged
-[disc] for the discretization-specific blocks. When config.discretize_actions
-is False, behavior is identical to the upstream implementation.
+On top of ACT, this policy supports action discretization with class-weighted cross-entropy, as a fix for
+L1 mode-collapse on long-tail action distributions (e.g. driving data with 90% near-zero steering
+commands). See comments tagged [disc] for the discretization-specific blocks. When
+config.discretize_actions is False, behavior is identical to ACT.
 """
 
+import logging
 import math
 from collections import deque
 from collections.abc import Callable
 from itertools import chain
+from pathlib import Path
 
 import einops
 import numpy as np
@@ -40,23 +41,24 @@ from torch import Tensor, nn
 from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
 
-from lerobot.policies.act.configuration_act import ACTConfig
+from lerobot.policies.cortex_agv.configuration_cortex_agv import CortexAGVConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
 
 
-class ACTPolicy(PreTrainedPolicy):
+class CortexAGVPolicy(PreTrainedPolicy):
     """
-    Action Chunking Transformer Policy as per Learning Fine-Grained Bimanual Manipulation with Low-Cost
-    Hardware (paper: https://huggingface.co/papers/2304.13705, code: https://github.com/tonyzhaozh/act)
+    Cortex AGV Policy: an Action Chunking Transformer (paper:
+    https://huggingface.co/papers/2304.13705, code: https://github.com/tonyzhaozh/act) with an optional
+    discrete, class-weighted action head for long-tail AGV driving actions.
     """
 
-    config_class = ACTConfig
-    name = "act"
+    config_class = CortexAGVConfig
+    name = "cortex_agv"
 
     def __init__(
         self,
-        config: ACTConfig,
+        config: CortexAGVConfig,
         **kwargs,
     ):
         """
@@ -68,10 +70,12 @@ class ACTPolicy(PreTrainedPolicy):
         config.validate_features()
         self.config = config
 
-        self.model = ACT(config)
+        self.model = CortexAGV(config)
 
         if config.temporal_ensemble_coeff is not None:
-            self.temporal_ensembler = ACTTemporalEnsembler(config.temporal_ensemble_coeff, config.chunk_size)
+            self.temporal_ensembler = CortexAGVTemporalEnsembler(
+                config.temporal_ensemble_coeff, config.chunk_size
+            )
 
         self.reset()
 
@@ -137,7 +141,7 @@ class ACTPolicy(PreTrainedPolicy):
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
-        # [disc] ACT.forward now returns 3 values (continuous actions, vae params, logits).
+        # [disc] CortexAGV.forward now returns 3 values (continuous actions, vae params, logits).
         # `actions` is the expected value over bins when discretizing, raw output otherwise.
         actions = self.model(batch)[0]
         return actions
@@ -148,7 +152,7 @@ class ACTPolicy(PreTrainedPolicy):
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
-        # [disc] ACT.forward returns 3 values: continuous actions (expected value when
+        # [disc] CortexAGV.forward returns 3 values: continuous actions (expected value when
         # discretizing), VAE params, and logits (None when not discretizing).
         actions_hat, (mu_hat, log_sigma_x2_hat), action_logits = self.model(batch)
 
@@ -220,7 +224,7 @@ class ACTPolicy(PreTrainedPolicy):
         return distances.argmin(dim=-1)
 
 
-class ACTTemporalEnsembler:
+class CortexAGVTemporalEnsembler:
     def __init__(self, temporal_ensemble_coeff: float, chunk_size: int) -> None:
         """Temporal ensembling as described in Algorithm 2 of https://huggingface.co/papers/2304.13705.
 
@@ -311,8 +315,8 @@ class ACTTemporalEnsembler:
         return action
 
 
-class ACT(nn.Module):
-    """Action Chunking Transformer: The underlying neural network for ACTPolicy.
+class CortexAGV(nn.Module):
+    """Action Chunking Transformer: The underlying neural network for CortexAGVPolicy.
 
     Note: In this code we use the terms `vae_encoder`, 'encoder', `decoder`. The meanings are as follows.
         - The `vae_encoder` is, as per the literature around variational auto-encoders (VAE), the part of the
@@ -346,14 +350,14 @@ class ACT(nn.Module):
                                 └───────────────────────┘
     """
 
-    def __init__(self, config: ACTConfig):
+    def __init__(self, config: CortexAGVConfig):
         # BERT style VAE encoder with input tokens [cls, robot_state, *action_sequence].
         # The cls token forms parameters of the latent's distribution (like this [*means, *log_variances]).
         super().__init__()
         self.config = config
 
         if self.config.use_vae:
-            self.vae_encoder = ACTEncoder(config, is_vae_encoder=True)
+            self.vae_encoder = CortexAGVEncoder(config, is_vae_encoder=True)
             self.vae_encoder_cls_embed = nn.Embedding(1, config.dim_model)
             # Projection layer for joint-space configuration to hidden dimension.
             if self.config.robot_state_feature:
@@ -390,8 +394,8 @@ class ACT(nn.Module):
             self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
 
         # Transformer (acts as VAE decoder when training with the variational objective).
-        self.encoder = ACTEncoder(config)
-        self.decoder = ACTDecoder(config)
+        self.encoder = CortexAGVEncoder(config)
+        self.decoder = CortexAGVDecoder(config)
 
         # Transformer encoder input projections. The tokens will be structured like
         # [latent, (robot_state), (env_state), (image_feature_map_pixels)].
@@ -416,7 +420,7 @@ class ACT(nn.Module):
             n_1d_tokens += 1
         self.encoder_1d_feature_pos_embed = nn.Embedding(n_1d_tokens, config.dim_model)
         if self.config.image_features:
-            self.encoder_cam_feat_pos_embed = ACTSinusoidalPositionEmbedding2d(config.dim_model // 2)
+            self.encoder_cam_feat_pos_embed = CortexAGVSinusoidalPositionEmbedding2d(config.dim_model // 2)
 
         # Transformer decoder.
         # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
@@ -436,9 +440,26 @@ class ACT(nn.Module):
             # by compute_action_bins.py using the same dataset stats the preprocessor uses,
             # so they live in NORMALIZED action space — the same space the policy sees
             # batch[ACTION] in during training.
-            payload = torch.load(self.config.action_bins_path, map_location="cpu", weights_only=False)
+            if self.config.action_bins_path is None:
+                raise ValueError(
+                    "[disc] `discretize_actions=True` requires `action_bins_path` to point to a .pt file "
+                    "produced by compute_action_bins.py."
+                )
+            bins_path = Path(self.config.action_bins_path)
+            if not bins_path.is_file():
+                raise FileNotFoundError(
+                    f"[disc] `action_bins_path` does not exist: {bins_path}. Generate it with "
+                    f"compute_action_bins.py (--n-bins={self._n_bins}), or set discretize_actions=False."
+                )
+            payload = torch.load(bins_path, map_location="cpu", weights_only=False)
+            missing_keys = {"bin_centers_normalized", "class_weights"} - set(payload)
+            if missing_keys:
+                raise KeyError(
+                    f"[disc] {bins_path} is missing the key(s) {sorted(missing_keys)}. Expected a file "
+                    f"produced by compute_action_bins.py."
+                )
             bin_centers_norm = payload["bin_centers_normalized"].float()
-            class_weights    = payload["class_weights"].float()
+            class_weights = payload["class_weights"].float()
 
             expected_shape = (action_dim, self._n_bins)
             if tuple(bin_centers_norm.shape) != expected_shape:
@@ -458,12 +479,15 @@ class ACT(nn.Module):
             self.register_buffer("bin_centers", bin_centers_norm)              # (action_dim, n_bins)
             self.register_buffer("action_class_weights", class_weights)        # (action_dim, n_bins)
 
-            print(f"[ACT/disc] discretization ENABLED — {self._n_bins} bins/dim, "
-                  f"loaded from {self.config.action_bins_path}")
-            print(f"[ACT/disc] class weight spread: "
-                  f"min={class_weights.min().item():.3f}  "
-                  f"max={class_weights.max().item():.3f}  "
-                  f"(rare bins get {class_weights.max().item() / class_weights.min().item():.1f}× more weight)")
+            logging.info(
+                f"[disc] discretization ENABLED — {self._n_bins} bins/dim, loaded from {bins_path}"
+            )
+            logging.info(
+                f"[disc] class weight spread: "
+                f"min={class_weights.min().item():.3f}  "
+                f"max={class_weights.max().item():.3f}  "
+                f"(rare bins get {class_weights.max().item() / class_weights.min().item():.1f}× more weight)"
+            )
         else:
             # Original continuous head.
             self.action_head = nn.Linear(config.dim_model, action_dim)
@@ -496,7 +520,7 @@ class ACT(nn.Module):
                                for inference and downstream continuous consumers).
             (mu, log_sigma²):  VAE latent params (both None when use_vae=False).
             action_logits:     (B, chunk_size, action_dim, n_bins) when discretizing,
-                               else None. Used by ACTPolicy.forward for CE loss.
+                               else None. Used by CortexAGVPolicy.forward for CE loss.
         """
         if self.config.use_vae and self.training:
             assert ACTION in batch, (
@@ -626,14 +650,14 @@ class ACT(nn.Module):
             return actions, (mu, log_sigma_x2), None
 
 
-class ACTEncoder(nn.Module):
+class CortexAGVEncoder(nn.Module):
     """Convenience module for running multiple encoder layers, maybe followed by normalization."""
 
-    def __init__(self, config: ACTConfig, is_vae_encoder: bool = False):
+    def __init__(self, config: CortexAGVConfig, is_vae_encoder: bool = False):
         super().__init__()
         self.is_vae_encoder = is_vae_encoder
         num_layers = config.n_vae_encoder_layers if self.is_vae_encoder else config.n_encoder_layers
-        self.layers = nn.ModuleList([ACTEncoderLayer(config) for _ in range(num_layers)])
+        self.layers = nn.ModuleList([CortexAGVEncoderLayer(config) for _ in range(num_layers)])
         self.norm = nn.LayerNorm(config.dim_model) if config.pre_norm else nn.Identity()
 
     def forward(
@@ -645,8 +669,8 @@ class ACTEncoder(nn.Module):
         return x
 
 
-class ACTEncoderLayer(nn.Module):
-    def __init__(self, config: ACTConfig):
+class CortexAGVEncoderLayer(nn.Module):
+    def __init__(self, config: CortexAGVConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
 
@@ -684,11 +708,11 @@ class ACTEncoderLayer(nn.Module):
         return x
 
 
-class ACTDecoder(nn.Module):
-    def __init__(self, config: ACTConfig):
+class CortexAGVDecoder(nn.Module):
+    def __init__(self, config: CortexAGVConfig):
         """Convenience module for running multiple decoder layers followed by normalization."""
         super().__init__()
-        self.layers = nn.ModuleList([ACTDecoderLayer(config) for _ in range(config.n_decoder_layers)])
+        self.layers = nn.ModuleList([CortexAGVDecoderLayer(config) for _ in range(config.n_decoder_layers)])
         self.norm = nn.LayerNorm(config.dim_model)
 
     def forward(
@@ -707,8 +731,8 @@ class ACTDecoder(nn.Module):
         return x
 
 
-class ACTDecoderLayer(nn.Module):
-    def __init__(self, config: ACTConfig):
+class CortexAGVDecoderLayer(nn.Module):
+    def __init__(self, config: CortexAGVConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
         self.multihead_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
@@ -797,7 +821,7 @@ def create_sinusoidal_pos_embedding(num_positions: int, dimension: int) -> Tenso
     return torch.from_numpy(sinusoid_table).float()
 
 
-class ACTSinusoidalPositionEmbedding2d(nn.Module):
+class CortexAGVSinusoidalPositionEmbedding2d(nn.Module):
     """2D sinusoidal positional embeddings similar to what's presented in Attention Is All You Need.
 
     The variation is that the position indices are normalized in [0, 2π] (not quite: the lower bound is 1/H

@@ -20,12 +20,66 @@ from lerobot.configs.types import NormalizationMode
 from lerobot.optim.optimizers import AdamWConfig
 
 
-@PreTrainedConfig.register_subclass("act")
+@PreTrainedConfig.register_subclass("cortex_agv")
 @dataclass
-class ACTConfig(PreTrainedConfig):
-    """Configuration class for the Action Chunking Transformers policy.
+class CortexAGVConfig(PreTrainedConfig):
+    """Configuration class for the Cortex AGV policy.
 
-    [...original docstring unchanged...]
+    Cortex AGV is an Action Chunking Transformer (ACT) variant specialised for AGV driving data, where the
+    action distribution is long-tailed (most commands sit at zero, the informative ones are rare). It adds
+    an optional discrete action head trained with class-weighted cross-entropy on top of the ACT backbone.
+
+    Defaults are configured for AGV driving datasets rather than the bimanual Aloha tasks ACT targets.
+
+    The parameters you will most likely need to change are the ones which depend on the environment / sensors.
+    Those are: `input_shapes` and 'output_shapes`.
+
+    Notes on the inputs and outputs:
+        - Either:
+            - At least one key starting with "observation.image is required as an input.
+              AND/OR
+            - The key "observation.environment_state" is required as input.
+        - If there are multiple keys beginning with "observation.images." they are treated as multiple camera
+          views. Right now we only support all images having the same shape.
+        - May optionally work without an "observation.state" key for the proprioceptive robot state.
+        - "action" is required as an output key.
+
+    Args:
+        n_obs_steps: Number of environment steps worth of observations to pass to the policy (takes the
+            current step and additional steps going back).
+        chunk_size: The size of the action prediction "chunks" in units of environment steps.
+        n_action_steps: The number of action steps to run in the environment for one invocation of the policy.
+            This should be no greater than the chunk size. For example, if the chunk size size 100, you may
+            set this to 50. This would mean that the model predicts 100 steps worth of actions, runs 50 in the
+            environment, and throws the other 50 out.
+        normalization_mapping: A dictionary with key representing the modality (e.g. "STATE"), and the value
+            specifies the normalization mode to apply. The two available modes are "MEAN_STD" which subtracts
+            the mean and divides by the standard deviation and "MIN_MAX" which rescale in a [-1, 1] range.
+        vision_backbone: Name of the torchvision resnet backbone to use for encoding images.
+        pretrained_backbone_weights: Pretrained weights from torchvision to initialize the backbone.
+            `None` means no pretrained weights.
+        replace_final_stride_with_dilation: Whether to replace the ResNet's final 2x2 stride with a dilated
+            convolution.
+        pre_norm: Whether to use "pre-norm" in the transformer blocks.
+        dim_model: The transformer blocks' main hidden dimension.
+        n_heads: The number of heads to use in the transformer blocks' multi-head attention.
+        dim_feedforward: The dimension to expand the transformer's hidden dimension to in the feed-forward
+            layers.
+        feedforward_activation: The activation to use in the transformer block's feed-forward layers.
+        n_encoder_layers: The number of transformer layers to use for the transformer encoder.
+        n_decoder_layers: The number of transformer layers to use for the transformer decoder.
+        use_vae: Whether to use a variational objective during training. This introduces another transformer
+            which is used as the VAE's encoder (not to be confused with the transformer encoder - see
+            documentation in the policy class).
+        latent_dim: The VAE's latent dimension.
+        n_vae_encoder_layers: The number of transformer layers to use for the VAE's encoder.
+        temporal_ensemble_coeff: Coefficient for the exponential weighting scheme to apply for temporal
+            ensembling. Defaults to None which means temporal ensembling is not used. `n_action_steps` must be
+            1 when using this feature, as inference needs to happen at every step to form an ensemble. For
+            more information on how ensembling works, please see `CortexAGVTemporalEnsembler`.
+        dropout: Dropout to use in the transformer layers (see code for details).
+        kl_weight: The weight to use for the KL-divergence component of the loss if the variational objective
+            is enabled. Loss is then calculated as: `reconstruction_loss + kl_weight * kld_loss`.
 
     Added (Method 1 — action discretization for long-tail action distributions):
         discretize_actions: If True, the action head outputs a categorical
@@ -87,12 +141,14 @@ class ACTConfig(PreTrainedConfig):
     optimizer_lr_backbone: float = 1e-5
 
     # ── Action discretization (Method 1: fix for long-tail / mode-collapse) ──
-    # Default OFF so existing checkpoints / configs keep working unchanged.
+    # Default OFF so the policy can be instantiated from its defaults (e.g. by
+    # `make_policy_config("cortex_agv")` or `from_pretrained`) and so existing
+    # checkpoints / configs keep working unchanged.
     # Enable by setting discretize_actions=true AND pointing action_bins_path
     # at a file generated by compute_action_bins.py.
-    discretize_actions: bool = True
-    n_action_bins: int = 31
-    action_bins_path: str | None = "C:/Users/Aadi/aditya/action_bins_uniform_a01.pt"
+    discretize_actions: bool = False
+    n_action_bins: int = 5
+    action_bins_path: str | None = None
 
     def __post_init__(self):
         super().__post_init__()
