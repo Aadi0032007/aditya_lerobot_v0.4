@@ -75,6 +75,14 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
     # Either the repo ID of a model hosted on the Hub or a path to a directory containing weights
     # saved using `Policy.save_pretrained`. If not provided, the policy is initialized from scratch.
     pretrained_path: Path | None = None
+    # The following two fields are accepted for compatibility with `config.json` files written by newer
+    # lerobot versions, so their checkpoints can be loaded here. Neither is acted upon:
+    # - `pretrained_revision` records the Hub revision (branch, tag or commit) the weights came from;
+    #   `from_pretrained(..., revision=...)` is what actually selects a revision.
+    # - `use_peft` records that the checkpoint was trained with PEFT/LoRA adapters. PEFT is not implemented
+    #   here, so a checkpoint with `use_peft=True` will not load correctly.
+    pretrained_revision: str | None = None
+    use_peft: bool = False
 
     def __post_init__(self) -> None:
         if not self.device or not is_torch_device_available(self.device):
